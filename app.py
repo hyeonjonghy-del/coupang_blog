@@ -109,43 +109,56 @@ def extract_coupang(url):
 # ── 블로그 글 생성 ────────────────────────────────────────────
 def generate_post(product, partner_url, api_key, category_hint=""):
     features_text = "\n".join([f"- {f}" for f in product.get("features",[])]) or "- 제품 특징"
-    prompt = f"""당신은 쿠팡 파트너스 수익을 위한 한국어 SEO 블로그 전문가입니다.
+
+    # ── 1단계: 제목/태그/키워드만 JSON으로 ──────────────────
+    meta_prompt = f"""상품명: {product['name']}
+가격: {product.get('price','')}
+{"카테고리: " + category_hint if category_hint else ""}
+
+아래 JSON만 출력 (백틱 없이):
+{{"title":"SEO 최적화 제목 60자 이내","meta_description":"검색결과 설명 160자 이내","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"핵심키워드"}}"""
+
+    meta_raw = gemini(meta_prompt, api_key)
+    meta_raw = re.sub(r"^```json\s*|\s*```$","",meta_raw,flags=re.MULTILINE).strip()
+    meta_raw = re.sub(r"^```\s*|\s*```$","",meta_raw,flags=re.MULTILINE).strip()
+    meta = json.loads(meta_raw)
+
+    # ── 2단계: 본문 HTML만 별도 생성 ────────────────────────
+    content_prompt = f"""한국어 SEO 블로그 리뷰 글을 HTML로 작성하세요.
 
 [상품 정보]
 - 상품명: {product['name']}
 - 가격: {product.get('price','')}
-- 별점: {product.get('rating','')}
-- 리뷰 수: {product.get('review_count','')}
-- 주요 특징:
-{features_text}
+- 별점/리뷰: {product.get('rating','')} / {product.get('review_count','')}
+- 특징: {features_text}
 - 파트너스 링크: {partner_url}
 {"- 카테고리: " + category_hint if category_hint else ""}
+- 핵심 키워드: {meta.get('focus_keyword','')}
 
-[작성 조건]
-1. 제목: 검색 의도 반영, 60자 이내 (상품명+혜택)
-2. 글 길이: 1500~2000자
-3. 구조:
-   - 도입부: 이 상품이 필요한 상황 공감
-   - 상품 핵심 특징 3가지 (h2 소제목 사용)
-   - 장점 위주 후기, 단점 1가지 솔직하게
-   - 가격 분석 및 가성비
-   - 구매 추천 마무리
-4. 파트너스 링크는 본문에 2~3회 자연스럽게:
-   <a href="{partner_url}" target="_blank" rel="noopener">👉 쿠팡에서 최저가 확인하기</a>
-5. 말투: 친근하고 솔직한 리뷰어 (광고 티 안 나게)
-6. HTML 형식 (h2, h3, p, ul, li, a, strong 태그 사용)
+[구조 - 반드시 아래 순서대로 완성할 것]
+1. 도입부 <p> 2개: 공감 유도
+2. 파트너스 링크 1회 삽입
+3. <h2>핵심 특징 3가지</h2> (각 <h3> + <p> + <ul>)
+4. <h2>장단점</h2> 장점3개 단점1개
+5. <h2>가격 및 가성비</h2> 1개 <p>
+6. <h2>구매 추천</h2> 파트너스 링크 1회 포함
+7. 마지막에 반드시 이 문구 추가:
+<p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>
 
-JSON만 출력 (백틱 없이):
-{{
-  "title": "SEO 최적화 제목",
-  "meta_description": "검색 결과 설명 160자 이내",
-  "tags": ["태그1","태그2","태그3","태그4","태그5"],
-  "content": "HTML 본문 전체",
-  "focus_keyword": "핵심 키워드"
-}}"""
+파트너스 링크 형식:
+<a href="{partner_url}" target="_blank" rel="noopener">👉 쿠팡에서 최저가 확인하기</a>
 
-    raw = gemini(prompt, api_key)
-    return safe_json_parse(raw)
+[주의사항]
+- 전체 1000~1200자 (너무 길지 않게)
+- 글이 반드시 </p> 로 완전히 끝나야 함
+- HTML 태그만 출력 (설명 없이)"""
+
+    content = gemini(content_prompt, api_key)
+    # 혹시 마크다운 코드블록으로 감싸진 경우 제거
+    content = re.sub(r"^```html\s*|\s*```$","",content,flags=re.MULTILINE).strip()
+    content = re.sub(r"^```\s*|\s*```$","",content,flags=re.MULTILINE).strip()
+
+    return {**meta, "content": content}
 
 # ── 워드프레스 포스팅 ─────────────────────────────────────────
 def wp_get_categories(wp_url, user, pw):
