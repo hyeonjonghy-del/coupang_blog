@@ -111,6 +111,50 @@ def safe_json_parse(raw):
         raise
 
 # ── 쿠팡 상품 정보 추출 ───────────────────────────────────────
+def extract_from_naver(keyword):
+    """네이버 쇼핑에서 상품 정보 추출"""
+    try:
+        enc = urllib.parse.quote(keyword)
+        url = f"https://search.shopping.naver.com/search/all?query={enc}&sort=review"
+        soup = BeautifulSoup(
+            requests.get(url, headers=HEADERS, timeout=15).text, "html.parser"
+        )
+
+        # __NEXT_DATA__ JSON 파싱
+        tag = soup.find("script", {"id": "__NEXT_DATA__"})
+        if tag:
+            data  = json.loads(tag.string)
+            items = (data.get("props",{}).get("pageProps",{})
+                     .get("initialState",{}).get("products",{}).get("list",[]))
+            if items:
+                d     = items[0].get("item", items[0])
+                name  = d.get("productTitle") or d.get("name","")
+                price = d.get("price") or d.get("lprice", 0)
+                img   = d.get("imageUrl") or d.get("image","")
+                rev   = d.get("reviewCount","")
+                brand = d.get("brand","")
+                if img.startswith("//"): img = "https:" + img
+
+                features = []
+                if brand: features.append(f"브랜드: {brand}")
+                for attr in d.get("attributes",[])[:5]:
+                    v = attr.get("value","")
+                    if v: features.append(v)
+
+                return {
+                    "name": str(name)[:60],
+                    "price": f"{int(price):,}원" if isinstance(price,(int,float)) and price else str(price),
+                    "rating": str(d.get("scoreInfo","")),
+                    "review_count": str(rev) if rev else "",
+                    "features": features,
+                    "image_url": img,
+                    "url": url,
+                }
+        return {"error": "네이버 쇼핑 검색 결과 없음"}
+    except Exception as e:
+        return {"error": f"네이버 추출 실패: {e}"}
+
+
 def extract_coupang(url):
     """쿠팡 상품 정보 추출 - 파트너스 링크 리다이렉트 지원"""
     try:
@@ -407,16 +451,28 @@ def main():
             st.caption("✅ 파트너스 링크 자동 적용됨")
 
     if coupang_url:
-        col_btn, _ = st.columns([1,3])
-        with col_btn:
-            if st.button("🔍 상품 정보 자동 추출"):
+        col_btn1, col_btn2, _ = st.columns([1.2, 1.5, 2])
+        with col_btn1:
+            if st.button("🔍 쿠팡에서 추출"):
                 with st.spinner("쿠팡 상품 정보 가져오는 중..."):
                     result = extract_coupang(coupang_url)
                     if "error" in result:
-                        st.warning(f"자동 추출 실패: {result['error']}\n아래에서 직접 입력해주세요.")
+                        st.warning(f"쿠팡 추출 실패 → 네이버로 시도해보세요")
                     else:
                         st.session_state["product"] = result
-                        st.success("✅ 상품 정보 추출 완료!")
+                        st.success("✅ 쿠팡 추출 완료!")
+        with col_btn2:
+            naver_keyword = st.text_input("🟢 네이버로 검색",
+                                          placeholder="상품명 입력 후 엔터",
+                                          label_visibility="collapsed")
+            if naver_keyword:
+                with st.spinner("네이버 쇼핑 검색 중..."):
+                    result = extract_from_naver(naver_keyword)
+                    if "error" in result:
+                        st.warning(result["error"])
+                    else:
+                        st.session_state["product"] = result
+                        st.success("✅ 네이버 추출 완료!")
 
     # 수동 입력
     with st.expander("✏️ 상품 정보 직접 입력 (자동 추출 안 될 때)"):
