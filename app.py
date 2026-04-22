@@ -417,9 +417,6 @@ def main():
                     else:
                         st.session_state["product"] = result
                         st.success("✅ 상품 정보 추출 완료!")
-                    else:
-                        st.session_state["product"] = result
-                        st.success("✅ 상품 정보 추출 완료!")
 
     # 수동 입력
     with st.expander("✏️ 상품 정보 직접 입력 (자동 추출 안 될 때)"):
