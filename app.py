@@ -112,50 +112,131 @@ def safe_json_parse(raw):
 
 # ── 쿠팡 상품 정보 추출 ───────────────────────────────────────
 def extract_coupang(url):
+    """쿠팡 상품 정보 추출 - 파트너스 링크 리다이렉트 지원"""
     try:
-        h = {**HEADERS, "Referer":"https://www.coupang.com/"}
-        soup = BeautifulSoup(requests.get(url,headers=h,timeout=15,allow_redirects=True).text,"html.parser")
+        h = {
+            **HEADERS,
+            "Referer": "https://www.coupang.com/",
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        }
 
+        # 파트너스 링크면 리다이렉트 따라가서 실제 URL 획득
+        if "link.coupang.com" in url:
+            r = requests.get(url, headers=h, timeout=15,
+                             allow_redirects=True)
+            url = r.url   # 최종 리다이렉트된 실제 URL
+
+        resp = requests.get(url, headers=h, timeout=15, allow_redirects=True)
+        soup = BeautifulSoup(resp.text, "html.parser")
+
+        # ── 상품명 ──────────────────────────────────────────
         name = ""
-        for sel in ["h1.prod-buy-header__title","h2.prod-buy-header__title","title"]:
+        for sel in [
+            "h1.prod-buy-header__title",
+            "h2.prod-buy-header__title",
+            "[class*='prod-buy-header__title']",
+            "h1[class*='title']",
+        ]:
             el = soup.select_one(sel)
             if el:
                 name = el.get_text(strip=True)
-                if sel=="title": name = re.sub(r"\s*[\||\-]\s*쿠팡.*","",name).strip()
                 break
+        if not name:
+            # title 태그에서 추출
+            t = soup.find("title")
+            if t:
+                name = re.sub(r"\s*[\||\-]\s*쿠팡.*", "", t.get_text()).strip()
 
+        # ── 가격 ──────────────────────────────────────────
         price = ""
-        for sel in ["span.total-price strong","span[class*='price-value']","strong[class*='price']"]:
-            el = soup.select_one(sel)
-            if el: price = el.get_text(strip=True); break
-
-        rating = ""
-        for sel in ["span.ratingValue","span[class*='rating']"]:
-            el = soup.select_one(sel)
-            if el: rating = el.get_text(strip=True); break
-
-        review_count = ""
-        for sel in ["span.count","span[class*='count']"]:
-            el = soup.select_one(sel)
-            if el: review_count = el.get_text(strip=True).strip("()"); break
-
-        features = []
-        for sel in ["ul.prod-description-attribute li","div[class*='description'] li"]:
-            items = soup.select(sel)
-            if items: features = [i.get_text(strip=True) for i in items[:8]]; break
-
-        img_url = ""
-        for sel in ["img#rep-image","img[class*='prod-image']"]:
+        for sel in [
+            "span.total-price strong",
+            "span[class*='price-value']",
+            "strong[class*='price']",
+            "[class*='total-price']",
+        ]:
             el = soup.select_one(sel)
             if el:
-                img_url = el.get("src") or el.get("data-src","")
+                price = el.get_text(strip=True)
+                break
+
+        # ── 할인율 ────────────────────────────────────────
+        discount = ""
+        for sel in ["span.discount-rate", "[class*='discount-rate']"]:
+            el = soup.select_one(sel)
+            if el:
+                discount = el.get_text(strip=True)
+                break
+        if discount:
+            price = f"{price} ({discount} 할인)"
+
+        # ── 별점 / 리뷰 수 ────────────────────────────────
+        rating = ""
+        for sel in ["span.ratingValue", "[class*='ratingValue']", "[class*='rating-star']"]:
+            el = soup.select_one(sel)
+            if el:
+                rating = el.get_text(strip=True)
+                break
+
+        review_count = ""
+        for sel in ["span.count", "[class*='ratingCount']", "[class*='review-count']"]:
+            el = soup.select_one(sel)
+            if el:
+                review_count = el.get_text(strip=True).strip("()")
+                break
+
+        # ── 상품 특징 ─────────────────────────────────────
+        features = []
+        for sel in [
+            "ul.prod-description-attribute li",
+            "div[class*='description'] li",
+            "ul[class*='prod-attr'] li",
+            "[class*='item-detail'] li",
+        ]:
+            items = soup.select(sel)
+            if items:
+                features = [i.get_text(strip=True) for i in items[:8]
+                            if i.get_text(strip=True)]
+                break
+
+        # ── 배송 정보 (특징에 추가) ───────────────────────
+        delivery_info = []
+        for sel in ["[class*='rocket']", "[class*='delivery-badge']",
+                    "span[class*='badge']"]:
+            items = soup.select(sel)
+            for it in items[:3]:
+                txt = it.get_text(strip=True)
+                if txt and len(txt) < 15:
+                    delivery_info.append(txt)
+        if delivery_info:
+            features.extend(list(set(delivery_info)))
+
+        # ── 이미지 ────────────────────────────────────────
+        img_url = ""
+        for sel in ["img#rep-image", "img[class*='prod-image__detail']",
+                    "img[class*='main-image']", ".prod-image__detail img"]:
+            el = soup.select_one(sel)
+            if el:
+                img_url = el.get("src") or el.get("data-src", "")
                 if img_url.startswith("//"): img_url = "https:" + img_url
                 break
 
-        return {"name":name or "상품명 추출 실패","price":price or "","rating":rating,
-                "review_count":review_count,"features":features,"image_url":img_url,"url":url}
+        # 상품명이 없으면 실패 처리
+        if not name or name == "쿠팡":
+            return {"error": "상품명을 추출하지 못했습니다. 수동으로 입력해주세요."}
+
+        return {
+            "name": name[:60],
+            "price": price or "가격 정보 없음",
+            "rating": rating,
+            "review_count": review_count,
+            "features": features,
+            "image_url": img_url,
+            "url": url,
+        }
+
     except Exception as e:
-        return {"error":str(e)}
+        return {"error": f"추출 실패: {str(e)}"}
 
 # ── 블로그 글 생성 ────────────────────────────────────────────
 def generate_post(product, partner_url, api_key, category_hint=""):
@@ -312,13 +393,18 @@ def main():
     st.subheader("① 상품 정보 입력")
     c1, c2 = st.columns(2)
     with c1:
-        coupang_url = st.text_input("🔗 쿠팡 상품 URL",
-                                    placeholder="https://www.coupang.com/vp/products/...",
-                                    help="쿠팡에서 개별 상품 페이지 URL을 복사하세요 (shop.coupang.com 브랜드 스토어 URL은 안 됩니다)")
-        st.caption("💡 올바른 URL 형식: `https://www.coupang.com/vp/products/숫자/...`")
+        coupang_url = st.text_input(
+            "🔗 쿠팡 상품 URL 또는 파트너스 링크",
+            placeholder="https://www.coupang.com/vp/products/... 또는 https://link.coupang.com/a/...",
+            help="쿠팡 상품 URL 또는 파트너스 링크 둘 다 가능합니다")
+        st.caption("💡 파트너스 링크(`link.coupang.com`)도 입력 가능 — 자동으로 상품 정보를 찾아드립니다")
     with c2:
         partner_url = st.text_input("🤝 쿠팡 파트너스 링크",
                                     placeholder="https://link.coupang.com/a/...")
+        # 상품 URL에 파트너스 링크 넣었으면 자동 복사
+        if coupang_url and "link.coupang.com" in coupang_url and not partner_url:
+            partner_url = coupang_url
+            st.caption("✅ 파트너스 링크 자동 적용됨")
 
     if coupang_url:
         col_btn, _ = st.columns([1,3])
@@ -328,6 +414,9 @@ def main():
                     result = extract_coupang(coupang_url)
                     if "error" in result:
                         st.warning(f"자동 추출 실패: {result['error']}\n아래에서 직접 입력해주세요.")
+                    else:
+                        st.session_state["product"] = result
+                        st.success("✅ 상품 정보 추출 완료!")
                     else:
                         st.session_state["product"] = result
                         st.success("✅ 상품 정보 추출 완료!")
