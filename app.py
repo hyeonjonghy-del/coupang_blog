@@ -450,26 +450,6 @@ def main():
             partner_url = coupang_url
             st.caption("✅ 파트너스 링크 자동 적용됨")
 
-    # 네이버 검색으로 상품 추출
-    st.markdown("**🟢 네이버 쇼핑으로 상품 정보 자동 추출**")
-    nav_col1, nav_col2 = st.columns([4, 1])
-    with nav_col1:
-        naver_keyword = st.text_input("상품명 입력",
-                                      placeholder="예: 아미니 바디워시, 테팔 에어프라이어",
-                                      label_visibility="collapsed")
-    with nav_col2:
-        naver_btn = st.button("🔍 검색", use_container_width=True)
-
-    if naver_btn and naver_keyword:
-        with st.spinner(f"'{naver_keyword}' 네이버 쇼핑 검색 중..."):
-            result = extract_from_naver(naver_keyword)
-            if "error" in result:
-                st.warning(f"네이버 추출 실패: {result['error']}")
-            else:
-                st.session_state["product"] = result
-                st.success(f"✅ 추출 완료: {result['name']}")
-                st.rerun()
-
     # 수동 입력
     with st.expander("✏️ 상품 정보 직접 입력 (자동 추출 안 될 때)"):
         with st.form("manual"):
