@@ -38,10 +38,26 @@ def gemini(prompt, api_key):
     model = _get_model(api_key)
     r = requests.post(f"{GEMINI_BASE}/{model}:generateContent?key={api_key}",
         json={"contents":[{"parts":[{"text":prompt}]}],
-              "generationConfig":{"temperature":0.7,"maxOutputTokens":4000}},
-        timeout=60)
+              "generationConfig":{"temperature":0.7,"maxOutputTokens":8000}},
+        timeout=90)
     r.raise_for_status()
     return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+
+def safe_json_parse(raw):
+    """JSON 파싱 - 잘린 경우도 최대한 복구"""
+    raw = re.sub(r"^```json\s*|\s*```$","",raw,flags=re.MULTILINE).strip()
+    raw = re.sub(r"^```\s*|\s*```$","",raw,flags=re.MULTILINE).strip()
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        # content 필드가 잘린 경우 닫아주기 시도
+        if '"content"' in raw and not raw.rstrip().endswith("}"):
+            for ending in ['"}}\n}', '"}\n}', '..."}']  :
+                try:
+                    return json.loads(raw + ending)
+                except:
+                    pass
+        raise
 
 # ── 쿠팡 상품 정보 추출 ───────────────────────────────────────
 def extract_coupang(url):
@@ -129,9 +145,7 @@ JSON만 출력 (백틱 없이):
 }}"""
 
     raw = gemini(prompt, api_key)
-    raw = re.sub(r"^```json\s*|\s*```$","",raw,flags=re.MULTILINE).strip()
-    raw = re.sub(r"^```\s*|\s*```$","",raw,flags=re.MULTILINE).strip()
-    return json.loads(raw)
+    return safe_json_parse(raw)
 
 # ── 워드프레스 포스팅 ─────────────────────────────────────────
 def wp_get_categories(wp_url, user, pw):
@@ -217,7 +231,9 @@ def main():
     c1, c2 = st.columns(2)
     with c1:
         coupang_url = st.text_input("🔗 쿠팡 상품 URL",
-                                    placeholder="https://www.coupang.com/vp/products/...")
+                                    placeholder="https://www.coupang.com/vp/products/...",
+                                    help="쿠팡에서 개별 상품 페이지 URL을 복사하세요 (shop.coupang.com 브랜드 스토어 URL은 안 됩니다)")
+        st.caption("💡 올바른 URL 형식: `https://www.coupang.com/vp/products/숫자/...`")
     with c2:
         partner_url = st.text_input("🤝 쿠팡 파트너스 링크",
                                     placeholder="https://link.coupang.com/a/...")
