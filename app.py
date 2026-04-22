@@ -167,7 +167,7 @@ def generate_post(product, partner_url, api_key, category_hint=""):
 {"카테고리: " + category_hint if category_hint else ""}
 
 아래 JSON만 출력 (백틱 없이):
-{{"title":"SEO 최적화 제목 60자 이내","meta_description":"검색결과 설명 160자 이내","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"핵심키워드"}}"""
+{{"title":"SEO 최적화 제목 60자 이내","meta_description":"검색결과 설명 160자 이내","slug":"영문-소문자-하이픈-슬러그-최대5단어","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"핵심키워드"}}"""
 
     meta_raw = gemini(meta_prompt, api_key)
     meta_raw = re.sub(r"^```json\s*|\s*```$","",meta_raw,flags=re.MULTILINE).strip()
@@ -239,6 +239,7 @@ def wp_post(wp_url, user, pw, post_data, status="draft", category_id=None):
         "excerpt": post_data.get("meta_description",""),
         "status":  status,
         "tags":    tag_ids,
+        "slug":    post_data.get("slug",""),
     }
     if category_id:
         payload["categories"] = [category_id]
@@ -388,11 +389,14 @@ def main():
         st.divider()
         st.subheader("③ 글 확인 & 워드프레스 포스팅")
 
-        t_col, m_col = st.columns(2)
+        t_col, m_col, s_col = st.columns(3)
         with t_col:
             edited_title = st.text_input("📌 제목", value=post.get("title",""))
         with m_col:
             edited_meta  = st.text_input("🔍 메타 설명", value=post.get("meta_description",""))
+        with s_col:
+            edited_slug  = st.text_input("🔗 슬러그 (URL)", value=post.get("slug",""),
+                                         help="영문 소문자 + 하이픈만 사용")
 
         st.caption(f"🏷️ 태그: {', '.join(post.get('tags',[]))}  |  🎯 키워드: {post.get('focus_keyword','')}")
 
@@ -427,7 +431,7 @@ def main():
             else:
                 status = "draft" if "임시저장" in post_status else "publish"
                 cat_id = cats.get(cat_name) if cat_name != "선택 안 함" else None
-                final  = {**post, "title":edited_title, "meta_description":edited_meta}
+                final  = {**post, "title":edited_title, "meta_description":edited_meta, "slug":edited_slug}
                 with st.spinner("워드프레스 포스팅 중..."):
                     try:
                         result = wp_post(wp_url, wp_user, wp_pass, final, status, cat_id)
