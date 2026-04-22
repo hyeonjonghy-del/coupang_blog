@@ -15,10 +15,7 @@ def gemini_call(prompt, api_key):
         "gemini-2.5-flash-preview-04-17",
         "gemini-2.5-pro-preview-03-25",
         "gemini-1.5-flash",
-        "gemini-1.5-flash-002",
-        "gemini-1.5-flash-001",
         "gemini-1.5-pro",
-        "gemini-1.5-pro-002",
         "gemini-1.0-pro",
     ]
     # 사용 가능한 모델 조회
@@ -29,9 +26,12 @@ def gemini_call(prompt, api_key):
             for m in data.get("models", [])
             if "generateContent" in m.get("supportedGenerationMethods", [])
         ]
-        models = [m for m in preferred if m in set(available)]
-        if not models:
-            models = available if available else preferred
+        if available:
+            # preferred 순서로 있는 것만, 없으면 available 전체
+            ordered = [m for m in preferred if m in set(available)]
+            models  = ordered if ordered else available
+        else:
+            models = preferred
     except Exception:
         models = preferred
 
@@ -196,6 +196,30 @@ def main():
                         st.success("✅ 연결 성공!")
                     else:
                         st.error(f"❌ {r.status_code}")
+                except Exception as e:
+                    st.error(str(e))
+
+        st.divider()
+        if st.button("🔍 Gemini 모델 목록 확인", use_container_width=True):
+            with st.spinner("조회 중..."):
+                try:
+                    r = requests.get(f"{GEMINI_BASE}?key={gemini_key}", timeout=10)
+                    st.caption(f"HTTP: {r.status_code}")
+                    data = r.json()
+                    if "error" in data:
+                        st.error(f"API 오류: {data['error'].get('message','')}")
+                    else:
+                        names = [
+                            m["name"].replace("models/","")
+                            for m in data.get("models",[])
+                            if "generateContent" in m.get("supportedGenerationMethods",[])
+                        ]
+                        if names:
+                            st.success(f"✅ {len(names)}개 모델")
+                            for n in names: st.code(n)
+                        else:
+                            st.warning("사용 가능한 모델 없음")
+                            st.json(data)
                 except Exception as e:
                     st.error(str(e))
 
