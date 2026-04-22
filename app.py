@@ -302,35 +302,37 @@ def generate_post(product, partner_url, api_key, category_hint=""):
     meta = json.loads(meta_raw)
 
     # ── 2단계: 본문 HTML만 별도 생성 ────────────────────────
+    extra_features = ("- 추가 특징: " + features_text) if features_text != "없음" else ""
+    extra_category = ("- 카테고리: " + category_hint) if category_hint else ""
+
     content_prompt = f"""당신은 한국어 SEO 블로그 전문가이자 해당 상품의 실사용 전문가입니다.
 
 [상품 정보]
 - 상품명: {product['name']}
 - 가격: {product.get('price','') or '미상'}
-{"- 추가 특징: " + features_text if features_text != "없음" else ""}
+{extra_features}
 - 파트너스 링크: {partner_url}
-{"- 카테고리: " + category_hint if category_hint else ""}
+{extra_category}
 - 핵심 키워드: {meta.get('focus_keyword','')}
 
 상품명을 분석해서 이 상품의 특징, 장점, 사용법을 잘 알고 있다고 가정하고 작성하세요.
 별도 특징 정보가 없어도 상품명에서 유추해서 구체적이고 실용적인 리뷰를 작성하세요.
 
 [구조 - 반드시 아래 순서대로 완성할 것]
-1. 도입부 <p> 2개: 이 상품이 필요한 상황 공감
+1. 도입부 p태그 2개: 이 상품이 필요한 상황 공감
 2. 파트너스 링크 1회 삽입
-3. <h2>핵심 특징 3가지</h2> (각 <h3> + <p> + <ul> 3개)
-4. <h2>장단점</h2> 장점3개 단점1개
-5. <h2>가격 및 가성비</h2> 1개 <p>
-6. <h2>구매 추천</h2> 파트너스 링크 1회 포함
-7. 마지막 문구:
-<p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>
+3. h2 핵심 특징 3가지 (각 h3 + p + ul 3개)
+4. h2 장단점: 장점3개 단점1개
+5. h2 가격 및 가성비: p 1개
+6. h2 구매 추천: 파트너스 링크 1회 포함
+7. 마지막에 반드시 이 문구:
+이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.
 
-파트너스 링크 형식:
-<a href="{partner_url}" target="_blank" rel="noopener">쿠팡에서 최저가 확인하기</a>
+파트너스 링크는 이 형식으로: a href 태그에 {partner_url} 넣고 텍스트는 '쿠팡에서 최저가 확인하기'
 
 [주의]
-- 전체 1000~1200자
-- 반드시 </p>로 완전히 끝낼 것
+- 전체 1000자에서 1200자 사이
+- 반드시 p 닫는 태그로 완전히 끝낼 것
 - HTML 태그만 출력 (설명 없이)"""
 
     content = gemini(content_prompt, api_key)
