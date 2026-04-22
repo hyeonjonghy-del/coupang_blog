@@ -35,36 +35,63 @@ def _get_model(api_key):
     return preferred[0]
 
 def gemini(prompt, api_key):
-    """모델 순서대로 시도 - 503/404면 다음 모델로 fallback"""
-    models = [
+    """실제 사용 가능한 모델 조회 후 순서대로 시도"""
+    # 1단계: 사용 가능한 모델 목록 조회
+    preferred_order = [
         "gemini-2.5-flash-preview-04-17",
+        "gemini-2.5-pro-exp-03-25",
+        "gemini-2.5-pro-preview-03-25",
         "gemini-1.5-flash-002",
         "gemini-1.5-flash-001",
+        "gemini-1.5-flash",
         "gemini-1.5-pro-002",
-        "gemini-2.5-pro-exp-03-25",
+        "gemini-1.5-pro-001",
+        "gemini-1.5-pro",
+        "gemini-1.0-pro",
     ]
+    try:
+        data = requests.get(f"{GEMINI_BASE}?key={api_key}", timeout=10).json()
+        available = [
+            m["name"].replace("models/", "")
+            for m in data.get("models", [])
+            if "generateContent" in m.get("supportedGenerationMethods", [])
+        ]
+        # preferred 순서대로 available 중에서 선택
+        models_to_try = [m for m in preferred_order if m in set(available)]
+        # preferred에 없는 것도 뒤에 추가
+        for m in available:
+            if m not in models_to_try:
+                models_to_try.append(m)
+    except Exception:
+        models_to_try = preferred_order
+
+    if not models_to_try:
+        raise RuntimeError("사용 가능한 Gemini 모델이 없습니다.")
+
     last_err = None
-    for model in models:
+    for model in models_to_try:
         try:
             r = requests.post(
                 f"{GEMINI_BASE}/{model}:generateContent?key={api_key}",
-                json={"contents":[{"parts":[{"text":prompt}]}],
-                      "generationConfig":{"temperature":0.7,"maxOutputTokens":8000}},
-                timeout=90)
-            if r.status_code == 503:
-                last_err = f"{model}: 서버 과부하(503), 다음 모델 시도..."
+                json={"contents": [{"parts": [{"text": prompt}]}],
+                      "generationConfig": {"temperature": 0.7, "maxOutputTokens": 8000}},
+                timeout=90,
+            )
+            if r.status_code in (503, 429):
+                last_err = f"{model}: 서버 과부하({r.status_code})"
                 continue
             if r.status_code == 404:
-                last_err = f"{model}: 모델 없음(404), 다음 모델 시도..."
+                last_err = f"{model}: 모델 없음(404)"
                 continue
             r.raise_for_status()
             return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
         except requests.exceptions.Timeout:
-            last_err = f"{model}: 타임아웃, 다음 모델 시도..."
+            last_err = f"{model}: 타임아웃"
             continue
         except Exception as e:
             last_err = str(e)
             continue
+
     raise RuntimeError(f"모든 모델 실패. 마지막 오류: {last_err}")
 
 def safe_json_parse(raw):
@@ -248,7 +275,24 @@ def main():
                                 placeholder="xxxx xxxx xxxx xxxx xxxx xxxx")
 
         st.divider()
-        if st.button("🔌 연결 테스트", use_container_width=True):
+        if st.button("🔍 사용 가능한 모델 확인", use_container_width=True):
+            with st.spinner("조회 중..."):
+                try:
+                    r = requests.get(f"{GEMINI_BASE}?key={gemini_key}", timeout=10)
+                    data = r.json()
+                    names = [
+                        m["name"].replace("models/","")
+                        for m in data.get("models",[])
+                        if "generateContent" in m.get("supportedGenerationMethods",[])
+                    ]
+                    if names:
+                        st.success(f"✅ {len(names)}개 모델 사용 가능")
+                        for n in names: st.code(n)
+                    else:
+                        st.warning("사용 가능한 모델 없음")
+                        st.json(data)
+                except Exception as e:
+                    st.error(str(e))
             with st.spinner("확인 중..."):
                 try:
                     r = requests.get(f"{wp_url.rstrip('/')}/wp-json/wp/v2/posts?per_page=1",
