@@ -287,12 +287,14 @@ def generate_post(product, partner_url, api_key, category_hint=""):
     features_text = "\n".join([f"- {f}" for f in product.get("features",[])]) or "- 제품 특징"
 
     # ── 1단계: 제목/태그/키워드만 JSON으로 ──────────────────
+    features_text = "\n".join([f"- {f}" for f in product.get("features",[])]) if product.get("features") else "없음"
+
     meta_prompt = f"""상품명: {product['name']}
-가격: {product.get('price','')}
+가격: {product.get('price','') or '정보없음'}
 {"카테고리: " + category_hint if category_hint else ""}
 
-아래 JSON만 출력 (백틱 없이):
-{{"title":"SEO 최적화 제목 60자 이내","meta_description":"검색결과 설명 160자 이내","slug":"영문-소문자-하이픈-슬러그-최대5단어","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"핵심키워드"}}"""
+당신은 이 상품에 대해 잘 알고 있는 전문가입니다. 상품명을 분석해서 어떤 상품인지 파악하고 아래 JSON만 출력 (백틱 없이):
+{{"title":"SEO 최적화 제목 60자 이내","meta_description":"검색결과 설명 160자 이내","slug":"영문-소문자-하이픈-슬러그-최대5단어","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"핵심키워드"}}""""""
 
     meta_raw = gemini(meta_prompt, api_key)
     meta_raw = re.sub(r"^```json\s*|\s*```$","",meta_raw,flags=re.MULTILINE).strip()
@@ -300,33 +302,35 @@ def generate_post(product, partner_url, api_key, category_hint=""):
     meta = json.loads(meta_raw)
 
     # ── 2단계: 본문 HTML만 별도 생성 ────────────────────────
-    content_prompt = f"""한국어 SEO 블로그 리뷰 글을 HTML로 작성하세요.
+    content_prompt = f"""당신은 한국어 SEO 블로그 전문가이자 해당 상품의 실사용 전문가입니다.
 
 [상품 정보]
 - 상품명: {product['name']}
-- 가격: {product.get('price','')}
-- 별점/리뷰: {product.get('rating','')} / {product.get('review_count','')}
-- 특징: {features_text}
+- 가격: {product.get('price','') or '미상'}
+{"- 추가 특징: " + features_text if features_text != "없음" else ""}
 - 파트너스 링크: {partner_url}
 {"- 카테고리: " + category_hint if category_hint else ""}
 - 핵심 키워드: {meta.get('focus_keyword','')}
 
+상품명을 분석해서 이 상품의 특징, 장점, 사용법을 잘 알고 있다고 가정하고 작성하세요.
+별도 특징 정보가 없어도 상품명에서 유추해서 구체적이고 실용적인 리뷰를 작성하세요.
+
 [구조 - 반드시 아래 순서대로 완성할 것]
-1. 도입부 <p> 2개: 공감 유도
+1. 도입부 <p> 2개: 이 상품이 필요한 상황 공감
 2. 파트너스 링크 1회 삽입
-3. <h2>핵심 특징 3가지</h2> (각 <h3> + <p> + <ul>)
+3. <h2>핵심 특징 3가지</h2> (각 <h3> + <p> + <ul> 3개)
 4. <h2>장단점</h2> 장점3개 단점1개
 5. <h2>가격 및 가성비</h2> 1개 <p>
 6. <h2>구매 추천</h2> 파트너스 링크 1회 포함
-7. 마지막에 반드시 이 문구 추가:
+7. 마지막 문구:
 <p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>
 
 파트너스 링크 형식:
 <a href="{partner_url}" target="_blank" rel="noopener">👉 쿠팡에서 최저가 확인하기</a>
 
-[주의사항]
-- 전체 1000~1200자 (너무 길지 않게)
-- 글이 반드시 </p> 로 완전히 끝나야 함
+[주의]
+- 전체 1000~1200자
+- 반드시 </p>로 완전히 끝낼 것
 - HTML 태그만 출력 (설명 없이)"""
 
     content = gemini(content_prompt, api_key)
@@ -450,21 +454,18 @@ def main():
             partner_url = coupang_url
             st.caption("✅ 파트너스 링크 자동 적용됨")
 
-    # 수동 입력
-    with st.expander("✏️ 상품 정보 직접 입력 (자동 추출 안 될 때)"):
-        with st.form("manual"):
-            mn = st.text_input("상품명 *")
-            mp = st.text_input("가격 (예: 89,900원)")
-            mr = st.text_input("리뷰 수 (예: 12,847개)")
-            mf = st.text_area("주요 특징 (한 줄에 하나씩)", height=100,
-                              placeholder="에어프라이어 4.2L 대용량\n기름 없이 바삭하게\n디지털 온도 조절...")
-            if st.form_submit_button("입력 완료", type="primary") and mn:
-                st.session_state["product"] = {
-                    "name":mn,"price":mp,"review_count":mr,
-                    "features":[f.strip() for f in mf.split("\n") if f.strip()],
-                    "image_url":"","url":coupang_url or "",
-                }
-                st.success("✅ 입력 완료!")
+    # 수동 입력 - 최소화
+    with st.form("manual"):
+        mn = st.text_input("상품명 *", placeholder="예: 아미니 플라워테라피 바디워시 1L 2개")
+        mp = st.text_input("가격", placeholder="예: 22,110원")
+        if st.form_submit_button("✅ 입력 완료", type="primary") and mn:
+            st.session_state["product"] = {
+                "name": mn, "price": mp,
+                "review_count": "", "features": [],
+                "image_url": "", "url": coupang_url or "",
+            }
+            st.success(f"✅ '{mn}' 입력 완료!")
+            st.rerun()
 
     # 상품 정보 표시
     if "product" in st.session_state:
