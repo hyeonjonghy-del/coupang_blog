@@ -13,10 +13,13 @@ HEADERS = {
 def gemini_call(prompt, api_key):
     preferred = [
         "gemini-2.5-flash-preview-04-17",
+        "gemini-2.5-pro-preview-03-25",
+        "gemini-1.5-flash",
         "gemini-1.5-flash-002",
         "gemini-1.5-flash-001",
+        "gemini-1.5-pro",
         "gemini-1.5-pro-002",
-        "gemini-1.5-pro-001",
+        "gemini-1.0-pro",
     ]
     # 사용 가능한 모델 조회
     try:
@@ -28,7 +31,7 @@ def gemini_call(prompt, api_key):
         ]
         models = [m for m in preferred if m in set(available)]
         if not models:
-            models = preferred
+            models = available if available else preferred
     except Exception:
         models = preferred
 
