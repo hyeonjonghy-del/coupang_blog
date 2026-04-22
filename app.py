@@ -35,13 +35,37 @@ def _get_model(api_key):
     return preferred[0]
 
 def gemini(prompt, api_key):
-    model = _get_model(api_key)
-    r = requests.post(f"{GEMINI_BASE}/{model}:generateContent?key={api_key}",
-        json={"contents":[{"parts":[{"text":prompt}]}],
-              "generationConfig":{"temperature":0.7,"maxOutputTokens":8000}},
-        timeout=90)
-    r.raise_for_status()
-    return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+    """모델 순서대로 시도 - 503/404면 다음 모델로 fallback"""
+    models = [
+        "gemini-2.5-flash-preview-04-17",
+        "gemini-1.5-flash-002",
+        "gemini-1.5-flash-001",
+        "gemini-1.5-pro-002",
+        "gemini-2.5-pro-exp-03-25",
+    ]
+    last_err = None
+    for model in models:
+        try:
+            r = requests.post(
+                f"{GEMINI_BASE}/{model}:generateContent?key={api_key}",
+                json={"contents":[{"parts":[{"text":prompt}]}],
+                      "generationConfig":{"temperature":0.7,"maxOutputTokens":8000}},
+                timeout=90)
+            if r.status_code == 503:
+                last_err = f"{model}: 서버 과부하(503), 다음 모델 시도..."
+                continue
+            if r.status_code == 404:
+                last_err = f"{model}: 모델 없음(404), 다음 모델 시도..."
+                continue
+            r.raise_for_status()
+            return r.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+        except requests.exceptions.Timeout:
+            last_err = f"{model}: 타임아웃, 다음 모델 시도..."
+            continue
+        except Exception as e:
+            last_err = str(e)
+            continue
+    raise RuntimeError(f"모든 모델 실패. 마지막 오류: {last_err}")
 
 def safe_json_parse(raw):
     """JSON 파싱 - 잘린 경우도 최대한 복구"""
