@@ -326,7 +326,7 @@ def generate_post(product, partner_url, api_key, category_hint=""):
 <p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>
 
 파트너스 링크 형식:
-<a href="{partner_url}" target="_blank" rel="noopener">👉 쿠팡에서 최저가 확인하기</a>
+<a href="{partner_url}" target="_blank" rel="noopener">쿠팡에서 최저가 확인하기</a>
 
 [주의]
 - 전체 1000~1200자
