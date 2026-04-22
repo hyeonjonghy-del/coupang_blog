@@ -450,29 +450,25 @@ def main():
             partner_url = coupang_url
             st.caption("✅ 파트너스 링크 자동 적용됨")
 
-    if coupang_url:
-        col_btn1, col_btn2, _ = st.columns([1.2, 1.5, 2])
-        with col_btn1:
-            if st.button("🔍 쿠팡에서 추출"):
-                with st.spinner("쿠팡 상품 정보 가져오는 중..."):
-                    result = extract_coupang(coupang_url)
-                    if "error" in result:
-                        st.warning(f"쿠팡 추출 실패 → 네이버로 시도해보세요")
-                    else:
-                        st.session_state["product"] = result
-                        st.success("✅ 쿠팡 추출 완료!")
-        with col_btn2:
-            naver_keyword = st.text_input("🟢 네이버로 검색",
-                                          placeholder="상품명 입력 후 엔터",
-                                          label_visibility="collapsed")
-            if naver_keyword:
-                with st.spinner("네이버 쇼핑 검색 중..."):
-                    result = extract_from_naver(naver_keyword)
-                    if "error" in result:
-                        st.warning(result["error"])
-                    else:
-                        st.session_state["product"] = result
-                        st.success("✅ 네이버 추출 완료!")
+    # 네이버 검색으로 상품 추출
+    st.markdown("**🟢 네이버 쇼핑으로 상품 정보 자동 추출**")
+    nav_col1, nav_col2 = st.columns([4, 1])
+    with nav_col1:
+        naver_keyword = st.text_input("상품명 입력",
+                                      placeholder="예: 아미니 바디워시, 테팔 에어프라이어",
+                                      label_visibility="collapsed")
+    with nav_col2:
+        naver_btn = st.button("🔍 검색", use_container_width=True)
+
+    if naver_btn and naver_keyword:
+        with st.spinner(f"'{naver_keyword}' 네이버 쇼핑 검색 중..."):
+            result = extract_from_naver(naver_keyword)
+            if "error" in result:
+                st.warning(f"네이버 추출 실패: {result['error']}")
+            else:
+                st.session_state["product"] = result
+                st.success(f"✅ 추출 완료: {result['name']}")
+                st.rerun()
 
     # 수동 입력
     with st.expander("✏️ 상품 정보 직접 입력 (자동 추출 안 될 때)"):
