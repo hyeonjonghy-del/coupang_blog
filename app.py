@@ -1,13 +1,68 @@
 import streamlit as st
 import requests
 from bs4 import BeautifulSoup
-import json, re, urllib.parse
+import json, re, urllib.parse, os, csv
+from datetime import datetime
 
 GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta/models"
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
     "Accept-Language": "ko-KR,ko;q=0.9",
 }
+
+# ── 포스팅 이력 관리 ──────────────────────────────────────────
+HISTORY_FILE = "/tmp/posting_history.json"
+
+def load_history():
+    """포스팅 이력 불러오기"""
+    if os.path.exists(HISTORY_FILE):
+        try:
+            with open(HISTORY_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return []
+
+def save_history(history):
+    """포스팅 이력 저장"""
+    try:
+        with open(HISTORY_FILE, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+def add_history(product_name, partner_url, post_title, post_link, category=""):
+    """이력에 새 항목 추가"""
+    history = load_history()
+    history.append({
+        "date":         datetime.now().strftime("%Y-%m-%d %H:%M"),
+        "product_name": product_name,
+        "category":     category,
+        "partner_url":  partner_url,
+        "post_title":   post_title,
+        "post_link":    post_link,
+    })
+    save_history(history)
+
+def check_duplicate(product_name):
+    """중복 상품 체크"""
+    history = load_history()
+    for item in history:
+        # 상품명 70% 이상 유사하면 중복으로 판단
+        name1 = product_name.replace(" ", "").lower()
+        name2 = item["product_name"].replace(" ", "").lower()
+        if name1 in name2 or name2 in name1:
+            return item
+    return None
+
+def history_to_csv(history):
+    """이력을 CSV 형식으로 변환"""
+    import io
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=["date","product_name","category","partner_url","post_title","post_link"])
+    writer.writeheader()
+    writer.writerows(history)
+    return output.getvalue().encode("utf-8-sig")
 
 # ── Gemini ────────────────────────────────────────────────────
 def gemini_call(prompt, api_key):
@@ -213,6 +268,13 @@ def main():
                     st.error(str(e))
 
         st.divider()
+
+        # 이력 현황
+        history = load_history()
+        st.metric("📊 총 포스팅 수", f"{len(history)}개")
+        if history:
+            st.caption(f"최근: {history[-1]['product_name'][:15]}...")
+
         if st.button("🔍 Gemini 모델 목록 확인", use_container_width=True):
             with st.spinner("조회 중..."):
                 try:
@@ -243,46 +305,109 @@ def main():
         st.warning("👈 Gemini API Key를 입력해주세요")
         st.stop()
 
+    # 메인 탭
+    tab_write, tab_history = st.tabs(["✍️ 글 작성", "📋 포스팅 이력"])
+
+    # ══════════════════════════════════════════════════════════
+    # 이력 탭
+    # ══════════════════════════════════════════════════════════
+    with tab_history:
+        st.subheader("📋 포스팅 이력 관리")
+        history = load_history()
+
+        if not history:
+            st.info("아직 포스팅 이력이 없습니다. 글을 작성하고 포스팅하면 자동으로 기록됩니다.")
+        else:
+            # 통계
+            c1, c2, c3 = st.columns(3)
+            with c1: st.metric("총 포스팅", f"{len(history)}개")
+            with c2: st.metric("오늘 포스팅", f"{sum(1 for h in history if h['date'].startswith(datetime.now().strftime('%Y-%m-%d')))}개")
+            with c3:
+                # CSV 다운로드
+                csv_data = history_to_csv(history)
+                st.download_button("⬇️ 엑셀로 내보내기", data=csv_data,
+                                   file_name=f"posting_history_{datetime.now().strftime('%Y%m%d')}.csv",
+                                   mime="text/csv", use_container_width=True)
+
+            st.divider()
+
+            # 검색
+            search = st.text_input("🔍 상품명 검색", placeholder="찾을 상품명 입력")
+            filtered = [h for h in reversed(history)
+                       if search.lower() in h["product_name"].lower()] if search else list(reversed(history))
+
+            # 목록 표시
+            for h in filtered:
+                with st.container(border=True):
+                    col1, col2, col3 = st.columns([3, 2, 2])
+                    with col1:
+                        st.markdown(f"**{h['product_name']}**")
+                        if h.get("category"):
+                            st.caption(f"카테고리: {h['category']}")
+                    with col2:
+                        st.caption(f"📅 {h['date']}")
+                        if h.get("partner_url"):
+                            st.caption(f"🔗 파트너스 링크 있음")
+                    with col3:
+                        if h.get("post_link"):
+                            st.link_button("글 보기 →", h["post_link"], use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════
+    # 글 작성 탭
+    # ══════════════════════════════════════════════════════════
+    with tab_write:
+
     # ① 상품 정보 입력
-    st.subheader("① 상품 정보 입력")
-    c1, c2 = st.columns(2)
-    with c1:
-        partner_url = st.text_input(
-            "🤝 쿠팡 파트너스 링크",
-            placeholder="https://link.coupang.com/a/...",
-        )
-    with c2:
-        st.write("")
+        st.subheader("① 상품 정보 입력")
+        c1, c2 = st.columns(2)
+        with c1:
+            partner_url = st.text_input(
+                "🤝 쿠팡 파트너스 링크",
+                placeholder="https://link.coupang.com/a/...",
+            )
+        with c2:
+            st.write("")
 
-    st.markdown("**상품명과 가격을 입력하세요** (10초면 됩니다)")
-    with st.form("product_form"):
-        col1, col2 = st.columns(2)
-        with col1:
-            mn = st.text_input("상품명 *", placeholder="예: 아미니 플라워테라피 바디워시 1L 2개")
-        with col2:
-            mp = st.text_input("가격", placeholder="예: 22,110원")
-        submitted = st.form_submit_button("✅ 입력 완료", type="primary")
-        if submitted and mn:
-            st.session_state["product"] = {
-                "name": mn, "price": mp,
-                "review_count": "", "features": [],
-                "image_url": "", "url": "",
-            }
-            st.success(f"✅ '{mn}' 입력 완료!")
+        st.markdown("**상품명과 가격을 입력하세요** (10초면 됩니다)")
+        with st.form("product_form"):
+            col1, col2 = st.columns(2)
+            with col1:
+                mn = st.text_input("상품명 *", placeholder="예: 아미니 플라워테라피 바디워시 1L 2개")
+            with col2:
+                mp = st.text_input("가격", placeholder="예: 22,110원")
+            submitted = st.form_submit_button("✅ 입력 완료", type="primary")
+            if submitted and mn:
+                # 중복 체크
+                dup = check_duplicate(mn)
+                if dup:
+                    st.warning(f"⚠️ 이미 포스팅한 상품과 유사합니다!\n\n"
+                              f"**{dup['product_name']}** ({dup['date']} 포스팅)\n\n"
+                              f"그래도 계속 진행하려면 다시 한번 입력 완료를 눌러주세요.")
+                    st.session_state["dup_warned"] = True
+                else:
+                    st.session_state["dup_warned"] = False
 
-    # 상품 확인
-    if "product" in st.session_state:
-        p = st.session_state["product"]
-        with st.container(border=True):
-            st.markdown(f"**📦 {p['name']}**  |  💰 {p.get('price','')}")
+                st.session_state["product"] = {
+                    "name": mn, "price": mp,
+                    "review_count": "", "features": [],
+                    "image_url": "", "url": "",
+                }
+                if not dup:
+                    st.success(f"✅ '{mn}' 입력 완료!")
 
-        # ② 글 생성
-        st.divider()
-        st.subheader("② AI 블로그 글 생성")
-        category_hint = st.text_input("카테고리 힌트 (선택)", placeholder="예: 바디워시, 주방가전, 다이어트")
+        # 상품 확인
+        if "product" in st.session_state:
+            p = st.session_state["product"]
+            with st.container(border=True):
+                st.markdown(f"**📦 {p['name']}**  |  💰 {p.get('price','')}")
 
-        if st.button("✍️ SEO 블로그 글 자동 생성", type="primary", use_container_width=True):
-            if not partner_url:
+            # ② 글 생성
+            st.divider()
+            st.subheader("② AI 블로그 글 생성")
+            category_hint = st.text_input("카테고리 힌트 (선택)", placeholder="예: 바디워시, 주방가전, 다이어트")
+
+            if st.button("✍️ SEO 블로그 글 자동 생성", type="primary", use_container_width=True):
+                if not partner_url:
                 st.warning("⚠️ 파트너스 링크를 먼저 입력해주세요!")
             else:
                 with st.spinner("✨ Gemini가 SEO 최적화 글 작성 중... (30~60초)"):
@@ -357,6 +482,15 @@ def main():
                         st.success("🎉 포스팅 완료!")
                         if link:
                             st.markdown(f"**📎 글 주소:** [{link}]({link})")
+                        # 이력 자동 저장
+                        add_history(
+                            product_name = p["name"],
+                            partner_url  = partner_url,
+                            post_title   = edited_title,
+                            post_link    = link,
+                            category     = cat_name if cat_name != "선택 안 함" else "",
+                        )
+                        st.toast("📋 포스팅 이력에 저장됐습니다!", icon="✅")
                         st.balloons()
                     except Exception as e:
                         st.error(f"포스팅 실패: {e}")
