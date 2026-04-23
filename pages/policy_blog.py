@@ -124,6 +124,45 @@ def strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+def extract_json(text: str) -> dict | list:
+    """Gemini 응답에서 JSON을 최대한 안전하게 추출"""
+    text = strip_code_fence(text)
+
+    # 1차: 그대로 파싱
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 2차: { } 블록 추출 후 파싱
+    match = re.search(r'\{.*\}', text, re.DOTALL)
+    if match:
+        try:
+            return json.loads(match.group())
+        except Exception:
+            pass
+
+    # 3차: 흔한 오류 자동 수정 후 파싱
+    #  - 한국어 내 따옴표 처리
+    #  - trailing comma 제거
+    fixed = text
+    fixed = re.sub(r',\s*([}\]])', r'\1', fixed)          # trailing comma
+    fixed = re.sub(r'[\x00-\x1f\x7f]', ' ', fixed)        # 제어문자 제거
+    try:
+        return json.loads(fixed)
+    except Exception:
+        pass
+
+    # 4차: 최후 수단 — 중괄호 블록 하나씩 시도
+    for m in re.finditer(r'\{[^{}]*\}', text, re.DOTALL):
+        try:
+            return json.loads(m.group())
+        except Exception:
+            continue
+
+    raise ValueError(f"JSON 추출 실패: {text[:200]}")
+
+
 # ─────────────────────────────────────────────────────────────
 # 네이버 뉴스 API
 # ─────────────────────────────────────────────────────────────
@@ -173,27 +212,41 @@ def collect_all_news(client_id: str, client_secret: str, categories: list) -> li
 # AI 글감 선별
 # ─────────────────────────────────────────────────────────────
 def ai_filter(items: list, api_key: str, top_n: int) -> list:
+    # 항목이 top_n보다 적으면 그냥 반환
+    if len(items) <= top_n:
+        for i, item in enumerate(items):
+            item.setdefault("blog_title", item["title"])
+            item.setdefault("reason", "")
+            item.setdefault("rank", i + 1)
+        return items
+
     numbered = "\n".join([
-        f"{i+1}. [{item['category']}] {item['title']}\n   {item['description'][:100]}"
+        f"{i+1}. [{item['category']}] {item['title']}"
         for i, item in enumerate(items)
     ])
-    prompt = (
-        f"오늘 수집된 뉴스/정책 정보입니다.\n"
-        f"블로그 글감으로 최적인 TOP {top_n}을 선별하세요.\n\n"
-        "[선별 기준]\n"
-        "- 일반인이 실제 혜택을 받을 수 있는 정보\n"
-        "- 검색량이 많을 것 같은 키워드 포함\n"
-        "- 신청방법/금액/대상이 구체적인 정보\n"
-        "- 카테고리 다양성 유지, 중복 주제 제외\n\n"
-        f"[수집 항목]\n{numbered}\n\n"
-        "반드시 아래 JSON만 출력 (백틱 없이):\n"
-        '{"selected":[{"rank":1,"index":1,'
-        '"blog_title":"SEO 최적화 블로그 제목",'
-        '"reason":"선별이유 한 줄"}]}'
-    )
+
+    prompt = f"""다음 뉴스 목록에서 블로그 글감으로 좋은 항목 {top_n}개를 골라주세요.
+
+[선별 기준]
+- 일반인이 실제 혜택을 받을 수 있는 정보
+- 검색량이 많을 것 같은 키워드
+- 카테고리가 다양하게 섞이도록
+
+[목록]
+{numbered}
+
+[출력 규칙]
+- 반드시 정확히 {top_n}개 선별
+- JSON만 출력 (설명, 백틱 절대 금지)
+- blog_title은 반드시 영어 없이 한국어로만 작성
+- reason은 10자 이내 한국어
+
+출력 형식:
+{{"selected":[{{"rank":1,"index":1,"blog_title":"제목","reason":"이유"}},{{"rank":2,"index":2,"blog_title":"제목","reason":"이유"}}]}}"""
+
     try:
-        text   = strip_code_fence(gemini_call(prompt, api_key, max_tokens=2000))
-        result = json.loads(text)
+        text   = gemini_call(prompt, api_key, max_tokens=3000)
+        result = extract_json(text)
         selected = []
         for sel in result.get("selected", []):
             idx = sel.get("index", 0) - 1
@@ -204,9 +257,24 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
                 item["rank"]       = sel.get("rank", 99)
                 selected.append(item)
         selected.sort(key=lambda x: x["rank"])
-        return selected
+        # 파싱은 됐지만 항목이 너무 적으면 나머지 보충
+        if len(selected) < min(top_n, len(items)):
+            existing_titles = {s["title"] for s in selected}
+            for item in items:
+                if item["title"] not in existing_titles:
+                    item.setdefault("blog_title", item["title"])
+                    item.setdefault("reason", "")
+                    item.setdefault("rank", len(selected) + 1)
+                    selected.append(item)
+                    if len(selected) >= top_n:
+                        break
+        return selected[:top_n]
     except Exception as e:
-        st.error(f"AI 선별 오류: {e}")
+        st.error(f"AI 선별 오류 (기본 목록 사용): {e}")
+        for i, item in enumerate(items[:top_n]):
+            item.setdefault("blog_title", item["title"])
+            item.setdefault("reason", "")
+            item.setdefault("rank", i + 1)
         return items[:top_n]
 
 
@@ -215,28 +283,44 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
 # ─────────────────────────────────────────────────────────────
 def generate_post(item: dict, api_key: str) -> dict:
     today   = datetime.now().strftime("%Y년 %m월")
-    keyword = item["blog_title"]
+    keyword = item.get("blog_title", item["title"])
 
-    # ① 메타 정보
-    meta_prompt = (
-        f"주제: {item['blog_title']}\n"
-        f"카테고리: {item['category']}\n"
-        f"기준: {today}\n"
-        "이 주제 전문가로서 아래 JSON만 출력 (백틱 없이):\n"
-        '{"title":"SEO 최적화 제목 60자 이내",'
-        '"meta_description":"검색결과 설명 160자 이내",'
-        '"slug":"english-lowercase-hyphen-max5words",'
-        '"tags":["태그1","태그2","태그3","태그4","태그5"],'
-        '"focus_keyword":"핵심키워드"}'
-    )
-    meta_raw = strip_code_fence(gemini_call(meta_prompt, api_key, max_tokens=500))
-    meta     = json.loads(meta_raw)
-    keyword  = meta.get("focus_keyword", keyword)
+    # ① 메타 정보 — 필드를 분리해서 요청 (JSON 오류 최소화)
+    meta_prompt = f"""다음 블로그 글의 SEO 메타 정보를 JSON으로 출력하세요.
+
+주제: {keyword}
+카테고리: {item['category']}
+기준: {today}
+
+규칙:
+- JSON만 출력 (백틱, 설명 절대 금지)
+- 모든 값은 쌍따옴표 사용
+- title: 한국어 50자 이내
+- meta_description: 한국어 120자 이내  
+- slug: 영문 소문자와 하이픈만 (예: government-support-2026)
+- tags: 한국어 태그 5개 배열
+- focus_keyword: 한국어 핵심키워드 1개
+
+{{"title":"제목","meta_description":"설명","slug":"slug","tags":["태그1","태그2","태그3","태그4","태그5"],"focus_keyword":"키워드"}}"""
+
+    try:
+        meta_raw = gemini_call(meta_prompt, api_key, max_tokens=600)
+        meta     = extract_json(meta_raw)
+        keyword  = meta.get("focus_keyword", keyword)
+    except Exception:
+        # 메타 생성 실패 시 기본값으로 진행
+        meta = {
+            "title":            keyword,
+            "meta_description": f"{keyword} 신청방법과 혜택을 알아보세요.",
+            "slug":             re.sub(r'[^a-z0-9]+', '-', keyword.lower())[:40],
+            "tags":             [item["category"], "지원금", "신청방법", "2026", "혜택"],
+            "focus_keyword":    keyword,
+        }
 
     # ② 본문 전반부
     part1_prompt = (
         "한국어 블로그 글 전반부를 HTML로 작성하세요.\n"
-        f"주제: {item['blog_title']}\n"
+        f"주제: {keyword}\n"
         f"카테고리: {item['category']}\n"
         f"참고내용: {item['description']}\n"
         f"핵심키워드: {keyword}\n"
@@ -251,7 +335,7 @@ def generate_post(item: dict, api_key: str) -> dict:
     # ③ 본문 후반부
     part2_prompt = (
         "한국어 블로그 글 후반부를 HTML로 작성하세요.\n"
-        f"주제: {item['blog_title']}\n"
+        f"주제: {keyword}\n"
         f"핵심키워드: {keyword}\n"
         f"참고링크: {item['link']}\n\n"
         "순서대로 작성:\n"
