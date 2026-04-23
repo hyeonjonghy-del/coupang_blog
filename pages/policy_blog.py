@@ -362,6 +362,74 @@ def generate_post(item: dict, api_key: str) -> dict:
     return {**meta, "content": part1 + "\n\n" + part2 + source_html}
 
 
+
+# ─────────────────────────────────────────────────────────────
+# Unsplash 대표 이미지
+# ─────────────────────────────────────────────────────────────
+def translate_keyword(keyword: str, api_key: str) -> str:
+    """한국어 키워드를 Unsplash 검색용 영어로 번역"""
+    try:
+        prompt = (
+            f"다음 한국어 키워드를 Unsplash 이미지 검색에 적합한 영어 2-3단어로 번역하세요.\n"
+            f"키워드: {keyword}\n"
+            "영어 단어만 출력 (설명 없이, 예: government support money)"
+        )
+        result = gemini_call(prompt, api_key, max_tokens=50)
+        return re.sub(r"[^a-zA-Z\s]", "", result).strip()[:50]
+    except Exception:
+        return "government support benefit"
+
+
+def search_unsplash(keyword_en: str, access_key: str) -> dict | None:
+    """Unsplash에서 이미지 검색 후 최적 결과 반환"""
+    try:
+        r = requests.get(
+            "https://api.unsplash.com/search/photos",
+            headers={"Authorization": f"Client-ID {access_key}"},
+            params={"query": keyword_en, "per_page": 5, "orientation": "landscape"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            results = r.json().get("results", [])
+            if results:
+                photo = results[0]
+                return {
+                    "url":       photo["urls"]["regular"],      # 표시용 (1080px)
+                    "url_dl":    photo["urls"]["full"],          # 다운로드용
+                    "thumb":     photo["urls"]["small"],         # 썸네일
+                    "author":    photo["user"]["name"],
+                    "author_url": photo["user"]["links"]["html"],
+                    "unsplash_url": photo["links"]["html"],
+                }
+        elif r.status_code == 401:
+            st.error("❌ Unsplash Access Key가 올바르지 않습니다.")
+    except Exception as e:
+        st.warning(f"Unsplash 검색 오류: {e}")
+    return None
+
+
+def upload_image_to_wp(image_url: str, slug: str, wp_url: str, user: str, pw: str) -> int | None:
+    """이미지를 WordPress 미디어 라이브러리에 업로드 후 media ID 반환"""
+    try:
+        img_res = requests.get(image_url, timeout=20)
+        img_res.raise_for_status()
+        filename = re.sub(r"[^a-z0-9]", "-", slug.lower())[:40] + ".jpg"
+        r = requests.post(
+            wp_url.rstrip("/") + "/wp-json/wp/v2/media",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Type": "image/jpeg",
+            },
+            data=img_res.content,
+            auth=(user, pw),
+            timeout=30,
+        )
+        r.raise_for_status()
+        return r.json().get("id")
+    except Exception as e:
+        st.warning(f"이미지 업로드 실패 (이미지 없이 발행): {e}")
+        return None
+
 # ─────────────────────────────────────────────────────────────
 # WordPress (기존 app.py wp_post 방식과 동일)
 # ─────────────────────────────────────────────────────────────
@@ -377,7 +445,7 @@ def wp_get_categories(wp_url: str, user: str, pw: str) -> dict:
 
 
 def wp_post(wp_url: str, user: str, pw: str, post_data: dict,
-            status: str = "draft", category_id=None) -> dict:
+            status: str = "draft", category_id=None, featured_media_id=None) -> dict:
     tag_ids = []
     for tag in post_data.get("tags", [])[:5]:
         try:
@@ -404,6 +472,8 @@ def wp_post(wp_url: str, user: str, pw: str, post_data: dict,
     }
     if category_id:
         payload["categories"] = [category_id]
+    if featured_media_id:
+        payload["featured_media"] = featured_media_id
 
     r = requests.post(
         wp_url.rstrip("/") + "/wp-json/wp/v2/posts",
@@ -447,6 +517,13 @@ def main():
         naver_secret = st.secrets.get("NAVER_CLIENT_SECRET", "") or st.text_input("Client Secret", type="password")
         if naver_id and naver_secret:
             st.success("🔑 Naver: 설정됨")
+
+        st.divider()
+        st.subheader("🖼️ Unsplash 대표 이미지")
+        st.caption("👉 [unsplash.com/developers](https://unsplash.com/developers) 에서 무료 발급")
+        unsplash_key = st.secrets.get("UNSPLASH_ACCESS_KEY", "") or st.text_input("Access Key", type="password")
+        if unsplash_key:
+            st.success("🔑 Unsplash: 설정됨")
 
         st.divider()
         st.subheader("🌐 WordPress")
@@ -611,6 +688,48 @@ def main():
                         post = st.session_state["p_posts"][i]
                         st.success("✅ 생성 완료 — 수정 후 포스팅하세요")
 
+                        # ── 대표 이미지 ──────────────────────────
+                        st.markdown("**🖼️ 대표 이미지**")
+                        img_key = f"p_img_{i}"
+                        if img_key not in st.session_state:
+                            st.session_state[img_key] = None
+
+                        img_col1, img_col2 = st.columns([3, 1])
+                        with img_col2:
+                            search_img_btn = st.button("🔍 이미지 검색", key=f"p_srch_{i}", use_container_width=True)
+                            if st.session_state[img_key]:
+                                clear_btn = st.button("❌ 이미지 제거", key=f"p_clr_{i}", use_container_width=True)
+                                if clear_btn:
+                                    st.session_state[img_key] = None
+                                    st.rerun()
+
+                        if search_img_btn:
+                            if not unsplash_key:
+                                st.warning("사이드바에 Unsplash Access Key를 입력하세요.")
+                            else:
+                                with st.spinner("Unsplash에서 이미지 검색 중..."):
+                                    kw_en = translate_keyword(post.get("focus_keyword", item["blog_title"]), gemini_key)
+                                    photo = search_unsplash(kw_en, unsplash_key)
+                                    if photo:
+                                        st.session_state[img_key] = photo
+                                        st.rerun()
+                                    else:
+                                        st.warning("이미지를 찾지 못했습니다. 다시 시도해보세요.")
+
+                        with img_col1:
+                            if st.session_state[img_key]:
+                                photo = st.session_state[img_key]
+                                st.image(photo["thumb"], use_container_width=True)
+                                st.caption(
+                                    f"📷 Photo by [{photo['author']}]({photo['author_url']}) "
+                                    f"on [Unsplash]({photo['unsplash_url']})"
+                                )
+                            else:
+                                st.info("'이미지 검색' 버튼을 눌러 대표 이미지를 자동으로 찾아보세요.")
+
+                        st.divider()
+                        # ─────────────────────────────────────────
+
                         t_col, m_col, s_col = st.columns(3)
                         with t_col:
                             edited_title = st.text_input("📌 제목", value=post.get("title", ""), key=f"p_t_{i}")
@@ -667,7 +786,17 @@ def main():
                                 }
                                 with st.spinner("워드프레스 포스팅 중..."):
                                     try:
-                                        result = wp_post(wp_url, wp_user, wp_pass, final, status, cat_id)
+                                        # 대표 이미지 업로드
+                                        media_id = None
+                                        photo_data = st.session_state.get(f"p_img_{i}")
+                                        if photo_data and unsplash_key:
+                                            with st.spinner("대표 이미지 업로드 중..."):
+                                                media_id = upload_image_to_wp(
+                                                    photo_data["url_dl"],
+                                                    final.get("slug", "blog-image"),
+                                                    wp_url, wp_user, wp_pass,
+                                                )
+                                        result = wp_post(wp_url, wp_user, wp_pass, final, status, cat_id, media_id)
                                         link   = result.get("link", "")
                                         st.success("🎉 포스팅 완료!")
                                         if link:
