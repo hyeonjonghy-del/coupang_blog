@@ -85,30 +85,43 @@ def generate_post(product, partner_url, api_key, category_hint=""):
     link_html = '<a href="' + partner_url + '" target="_blank" rel="noopener">쿠팡에서 최저가 확인하기</a>'
     notice    = "<p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>"
 
-    content_prompt = (
-        "당신은 한국어 SEO 블로그 전문가이자 해당 상품 전문가입니다.\n\n"
+    # 2단계: 본문 전반부 (도입부 + 특징 3가지)
+    part1_prompt = (
+        "한국어 SEO 블로그 리뷰 전반부를 HTML로 작성하세요.\n\n"
         "상품명: " + name + "\n"
         "가격: " + price + "\n"
         + ("카테고리: " + cat + "\n" if cat else "")
-        + "핵심 키워드: " + keyword + "\n"
-        "파트너스 링크: " + partner_url + "\n\n"
-        "상품명을 분석해서 특징/장점/사용법을 잘 아는 전문가처럼 리뷰를 작성하세요.\n\n"
-        "[구조 순서]\n"
-        "1. p 태그 도입부 2개 (공감 유도)\n"
+        + "핵심 키워드: " + keyword + "\n\n"
+        "순서대로 작성:\n"
+        "1. p 도입부 2개 (공감 유도 + 상품 소개)\n"
         "2. 파트너스 링크 1회: " + link_html + "\n"
-        "3. h2 핵심 특징 3가지 (h3 소제목 + p + ul)\n"
-        "4. h2 장단점 (장점3개 단점1개)\n"
-        "5. h2 가격 및 가성비 (p 1개)\n"
-        "6. h2 구매 추천 + 파트너스 링크 1회\n"
-        "7. 마지막 문구: " + notice + "\n\n"
-        "[주의]\n"
-        "- 전체 1000자에서 1200자\n"
-        "- 반드시 p 닫는 태그로 끝낼 것\n"
-        "- HTML만 출력 (설명 없이)\n"
+        "3. h2 핵심 특징 3가지 (각각 h3 + p + ul 3항목)\n\n"
+        "HTML만 출력 (설명 없이)\n"
     )
-    content = gemini_call(content_prompt, api_key)
-    content = re.sub(r"^```html\s*|\s*```$", "", content, flags=re.MULTILINE).strip()
-    content = re.sub(r"^```\s*|\s*```$",     "", content, flags=re.MULTILINE).strip()
+
+    # 본문 후반부 (장단점 + 가격 + 구매추천)
+    part2_prompt = (
+        "한국어 SEO 블로그 리뷰 후반부를 HTML로 작성하세요.\n\n"
+        "상품명: " + name + "\n"
+        "가격: " + price + "\n"
+        "핵심 키워드: " + keyword + "\n\n"
+        "순서대로 작성:\n"
+        "1. h2 장단점: 장점3개(p) 단점1개(p)\n"
+        "2. h2 가격 및 가성비: p 1개\n"
+        "3. h2 구매 추천: p + 파트너스 링크: " + link_html + "\n"
+        "4. 마지막: " + notice + "\n\n"
+        "HTML만 출력 (설명 없이)\n"
+    )
+
+    part1 = gemini_call(part1_prompt, api_key)
+    part1 = re.sub(r"^```html\s*|\s*```$", "", part1, flags=re.MULTILINE).strip()
+    part1 = re.sub(r"^```\s*|\s*```$",     "", part1, flags=re.MULTILINE).strip()
+
+    part2 = gemini_call(part2_prompt, api_key)
+    part2 = re.sub(r"^```html\s*|\s*```$", "", part2, flags=re.MULTILINE).strip()
+    part2 = re.sub(r"^```\s*|\s*```$",     "", part2, flags=re.MULTILINE).strip()
+
+    content = part1 + "\n\n" + part2
 
     return {**meta, "content": content}
 
