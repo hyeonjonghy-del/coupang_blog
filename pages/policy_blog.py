@@ -162,6 +162,30 @@ def extract_json(text: str) -> dict | list:
 
     raise ValueError(f"JSON 추출 실패: {text[:200]}")
 
+# 카테고리별 영문 슬러그 기본값
+CATEGORY_SLUG_PREFIX = {
+    "정부 지원금/보조금":       "government-subsidy",
+    "창업/소상공인 지원":       "small-business-support",
+    "부업/재테크 정보":         "side-job-finance",
+    "복지 혜택 (육아·노인 등)": "welfare-benefit",
+}
+
+def make_safe_slug(raw_slug: str, category: str = "", fallback_keyword: str = "") -> str:
+    """슬러그를 항상 영문+하이픈+숫자로 정규화"""
+    import unicodedata
+
+    # 1) 이미 영문만 있으면 정리 후 반환
+    cleaned = re.sub(r"[^a-z0-9]+", "-", raw_slug.lower()).strip("-")
+    # 영문자가 2개 이상이고 숫자만 아니면 OK
+    if cleaned and re.search(r"[a-z]{2,}", cleaned):
+        return cleaned[:60]
+
+    # 2) 한글/숫자만 남은 경우 → 카테고리 prefix + 날짜 사용
+    prefix = CATEGORY_SLUG_PREFIX.get(category, "blog-post")
+    date_str = datetime.now().strftime("%Y%m%d")
+    return f"{prefix}-{date_str}"
+
+
 
 # ─────────────────────────────────────────────────────────────
 # 네이버 뉴스 API
@@ -312,10 +336,17 @@ def generate_post(item: dict, api_key: str) -> dict:
         meta = {
             "title":            keyword,
             "meta_description": f"{keyword} 신청방법과 혜택을 알아보세요.",
-            "slug":             re.sub(r'[^a-z0-9]+', '-', keyword.lower())[:40],
+            "slug":             "",
             "tags":             [item["category"], "지원금", "신청방법", "2026", "혜택"],
             "focus_keyword":    keyword,
         }
+
+    # 슬러그 항상 영문으로 강제 보정
+    meta["slug"] = make_safe_slug(
+        meta.get("slug", ""),
+        category=item.get("category", ""),
+        fallback_keyword=keyword,
+    )
 
     # ② 본문 전반부
     part1_prompt = (
