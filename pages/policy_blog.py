@@ -341,15 +341,25 @@ def generate_post(item: dict, api_key: str) -> dict:
         "순서대로 작성:\n"
         "1. <h2>📋 신청 방법 step by step</h2> — <ol>로 단계별\n"
         "2. <h2>⚠️ 주의사항 & 꿀팁</h2>\n"
-        "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁\n"
-        "4. <p><em>※ 정확한 정보는 관련 공식 사이트에서 반드시 확인하세요.</em></p>\n\n"
+        "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁\n\n"
         "친근한 말투(~해요), HTML만 출력 (설명 없이)"
     )
 
     part1 = strip_code_fence(gemini_call(part1_prompt, api_key))
     part2 = strip_code_fence(gemini_call(part2_prompt, api_key))
 
-    return {**meta, "content": part1 + "\n\n" + part2}
+    # 출처 링크를 본문 맨 아래에 직접 삽입
+    link = item.get("link", "")
+    if link:
+        source_html = (
+            f'\n<p><em>※ 정확한 정보는 '
+            f'<a href="{link}" target="_blank" rel="noopener">관련 공식 사이트</a>'
+            f'에서 반드시 확인하세요.</em></p>'
+        )
+    else:
+        source_html = '\n<p><em>※ 정확한 정보는 관련 공식 사이트에서 반드시 확인하세요.</em></p>'
+
+    return {**meta, "content": part1 + "\n\n" + part2 + source_html}
 
 
 # ─────────────────────────────────────────────────────────────
