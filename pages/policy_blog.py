@@ -380,32 +380,33 @@ def translate_keyword(keyword: str, api_key: str) -> str:
         return "government support benefit"
 
 
-def search_unsplash(keyword_en: str, access_key: str) -> dict | None:
-    """Unsplash에서 이미지 검색 후 최적 결과 반환"""
+def search_unsplash(keyword_en: str, access_key: str, count: int = 3) -> list:
+    """Unsplash에서 이미지 검색 후 후보 목록 반환"""
     try:
         r = requests.get(
             "https://api.unsplash.com/search/photos",
             headers={"Authorization": f"Client-ID {access_key}"},
-            params={"query": keyword_en, "per_page": 5, "orientation": "landscape"},
+            params={"query": keyword_en, "per_page": count, "orientation": "landscape"},
             timeout=10,
         )
         if r.status_code == 200:
             results = r.json().get("results", [])
-            if results:
-                photo = results[0]
-                return {
-                    "url":       photo["urls"]["regular"],      # 표시용 (1080px)
-                    "url_dl":    photo["urls"]["full"],          # 다운로드용
-                    "thumb":     photo["urls"]["small"],         # 썸네일
-                    "author":    photo["user"]["name"],
-                    "author_url": photo["user"]["links"]["html"],
+            photos = []
+            for photo in results:
+                photos.append({
+                    "url":          photo["urls"]["regular"],
+                    "url_dl":       photo["urls"]["full"],
+                    "thumb":        photo["urls"]["small"],
+                    "author":       photo["user"]["name"],
+                    "author_url":   photo["user"]["links"]["html"],
                     "unsplash_url": photo["links"]["html"],
-                }
+                })
+            return photos
         elif r.status_code == 401:
             st.error("❌ Unsplash Access Key가 올바르지 않습니다.")
     except Exception as e:
         st.warning(f"Unsplash 검색 오류: {e}")
-    return None
+    return []
 
 
 def upload_image_to_wp(image_url: str, slug: str, wp_url: str, user: str, pw: str) -> int | None:
@@ -690,42 +691,70 @@ def main():
 
                         # ── 대표 이미지 ──────────────────────────
                         st.markdown("**🖼️ 대표 이미지**")
-                        img_key = f"p_img_{i}"
-                        if img_key not in st.session_state:
-                            st.session_state[img_key] = None
+                        img_key      = f"p_img_{i}"       # 선택된 이미지
+                        cands_key    = f"p_cands_{i}"     # 후보 이미지 목록
+                        kw_key       = f"p_kwen_{i}"      # 검색 키워드
+                        if img_key   not in st.session_state: st.session_state[img_key]   = None
+                        if cands_key not in st.session_state: st.session_state[cands_key] = []
+                        if kw_key    not in st.session_state: st.session_state[kw_key]    = ""
 
-                        img_col1, img_col2 = st.columns([3, 1])
-                        with img_col2:
-                            search_img_btn = st.button("🔍 이미지 검색", key=f"p_srch_{i}", use_container_width=True)
-                            if st.session_state[img_key]:
-                                clear_btn = st.button("❌ 이미지 제거", key=f"p_clr_{i}", use_container_width=True)
-                                if clear_btn:
-                                    st.session_state[img_key] = None
-                                    st.rerun()
+                        # 검색어 입력 + 버튼
+                        kw_col, btn_col = st.columns([4, 1])
+                        with kw_col:
+                            manual_kw = st.text_input(
+                                "검색어 (영어 권장)",
+                                value=st.session_state[kw_key],
+                                placeholder="예: government subsidy money / people working",
+                                key=f"p_kwin_{i}",
+                            )
+                        with btn_col:
+                            st.write("")
+                            search_img_btn = st.button("🔍 검색", key=f"p_srch_{i}", use_container_width=True)
 
                         if search_img_btn:
                             if not unsplash_key:
                                 st.warning("사이드바에 Unsplash Access Key를 입력하세요.")
                             else:
-                                with st.spinner("Unsplash에서 이미지 검색 중..."):
-                                    kw_en = translate_keyword(post.get("focus_keyword", item["blog_title"]), gemini_key)
-                                    photo = search_unsplash(kw_en, unsplash_key)
-                                    if photo:
+                                with st.spinner("Unsplash 이미지 검색 중..."):
+                                    # 직접 입력한 키워드 우선, 없으면 AI 번역
+                                    kw_en = manual_kw.strip() if manual_kw.strip() else                                             translate_keyword(post.get("focus_keyword", item["blog_title"]), gemini_key)
+                                    st.session_state[kw_key]    = kw_en
+                                    st.session_state[cands_key] = search_unsplash(kw_en, unsplash_key, count=3)
+                                    st.session_state[img_key]   = None  # 선택 초기화
+                                    if not st.session_state[cands_key]:
+                                        st.warning("이미지를 찾지 못했습니다. 다른 검색어를 입력해보세요.")
+                                    st.rerun()
+
+                        # 후보 이미지 3개 표시 → 클릭해서 선택
+                        cands = st.session_state[cands_key]
+                        if cands:
+                            st.caption(f"🔎 검색어: `{st.session_state[kw_key]}` — 아래에서 사용할 이미지를 선택하세요")
+                            cols = st.columns(len(cands))
+                            for ci, (col, photo) in enumerate(zip(cols, cands)):
+                                with col:
+                                    st.image(photo["thumb"], use_container_width=True)
+                                    st.caption(f"📷 {photo['author']}")
+                                    is_selected = st.session_state[img_key] == photo
+                                    btn_label = "✅ 선택됨" if is_selected else f"이 사진 선택"
+                                    if st.button(btn_label, key=f"p_sel_{i}_{ci}", use_container_width=True,
+                                                 type="primary" if is_selected else "secondary"):
                                         st.session_state[img_key] = photo
                                         st.rerun()
-                                    else:
-                                        st.warning("이미지를 찾지 못했습니다. 다시 시도해보세요.")
 
-                        with img_col1:
-                            if st.session_state[img_key]:
-                                photo = st.session_state[img_key]
-                                st.image(photo["thumb"], use_container_width=True)
-                                st.caption(
-                                    f"📷 Photo by [{photo['author']}]({photo['author_url']}) "
-                                    f"on [Unsplash]({photo['unsplash_url']})"
-                                )
-                            else:
-                                st.info("'이미지 검색' 버튼을 눌러 대표 이미지를 자동으로 찾아보세요.")
+                        elif st.session_state[img_key] is None:
+                            st.info("검색어를 입력하고 '🔍 검색' 버튼을 클릭하세요. (영어 키워드가 더 잘 찾아져요!)")
+
+                        # 선택된 이미지 표시
+                        if st.session_state[img_key]:
+                            photo = st.session_state[img_key]
+                            sel_col, clr_col = st.columns([4, 1])
+                            with sel_col:
+                                st.success(f"✅ 선택된 이미지: {photo['author']}")
+                            with clr_col:
+                                if st.button("❌ 제거", key=f"p_clr_{i}", use_container_width=True):
+                                    st.session_state[img_key]   = None
+                                    st.session_state[cands_key] = []
+                                    st.rerun()
 
                         st.divider()
                         # ─────────────────────────────────────────
