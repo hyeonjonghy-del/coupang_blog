@@ -1,8 +1,8 @@
 """
 pages/policy_blog.py
-정책·부업 블로그 자동화
-- 네이버 뉴스 API로 매일 정보 수집
-- Gemini AI로 글감 선별 + 블로그 글 생성
+생활금융 블로그 자동화
+- 네이버 뉴스 API로 매일 정보 수집 (5개 카테고리: 정부정책·부업창업·노후연금·대출·절세)
+- Gemini AI로 글감 선별 + 카테고리별 맞춤 블로그 글 생성
 - WordPress 자동 발행 (기존 쿠팡 블로그와 동일 설정 공유)
 """
 
@@ -16,25 +16,52 @@ GEMINI_BASE   = "https://generativelanguage.googleapis.com/v1beta/models"
 HISTORY_FILE  = "/tmp/policy_history.json"
 
 CATEGORY_QUERIES = {
-    "정부 지원금/보조금": [
-        "정부 지원금 2026",
+    "돈주는 정부 정책": [
+        "정부 지원금 신청 2026",
         "보조금 신청방법 2026",
-        "정부 지원사업 공고",
-    ],
-    "창업/소상공인 지원": [
-        "소상공인 지원금 2026",
-        "창업 지원사업 신청",
-        "중소기업 정책자금",
-    ],
-    "부업/재테크 정보": [
-        "부업 추천 2026",
-        "재테크 방법 직장인",
-        "투자 정보 ETF",
-    ],
-    "복지 혜택 (육아·노인 등)": [
-        "육아 지원금 신청",
+        "정부 지원사업 공고 2026",
+        "복지 혜택 신청방법 2026",
+        "육아 지원금 신청 2026",
         "노인 복지 혜택 2026",
-        "복지 혜택 신청방법",
+        "청년 정부지원 혜택",
+        "1인가구 지원금 신청",
+    ],
+    "부업 및 창업": [
+        "소상공인 지원금 2026",
+        "창업 지원사업 신청 2026",
+        "중소기업 정책자금 2026",
+        "부업 추천 2026",
+        "N잡 수익 만들기",
+        "재테크 방법 직장인 2026",
+        "온라인 부업 수익",
+        "프리랜서 부업 추천",
+    ],
+    "노후 및 연금 전략": [
+        "국민연금 수령액 늘리기 2026",
+        "퇴직연금 IRP 운용방법",
+        "연금저축 세액공제 2026",
+        "개인연금 추천 2026",
+        "노후 준비 방법 직장인",
+        "국민연금 임의가입 장점",
+        "퇴직금 운용 방법",
+    ],
+    "대출 가이드": [
+        "주택담보대출 금리 비교 2026",
+        "전세대출 조건 신청방법 2026",
+        "청년 대출 지원 2026",
+        "신용대출 금리 비교",
+        "대출 갈아타기 방법 2026",
+        "디딤돌대출 신청방법",
+        "버팀목전세대출 조건",
+    ],
+    "돈 아끼는 절세 비법": [
+        "연말정산 환급 꿀팁 2026",
+        "종합소득세 신고 절세방법",
+        "절세 방법 직장인 2026",
+        "양도세 절감 방법 2026",
+        "증여세 절세 전략",
+        "ISA 절세계좌 활용법",
+        "부양가족 공제 조건 방법",
     ],
 }
 
@@ -164,10 +191,11 @@ def extract_json(text: str) -> dict | list:
 
 # 카테고리별 영문 슬러그 기본값
 CATEGORY_SLUG_PREFIX = {
-    "정부 지원금/보조금":       "government-subsidy",
-    "창업/소상공인 지원":       "small-business-support",
-    "부업/재테크 정보":         "side-job-finance",
-    "복지 혜택 (육아·노인 등)": "welfare-benefit",
+    "돈주는 정부 정책":   "gov-policy",
+    "부업 및 창업":       "side-hustle",
+    "노후 및 연금 전략":  "pension-plan",
+    "대출 가이드":        "loan-guide",
+    "돈 아끼는 절세 비법": "tax-strategy",
 }
 
 def make_safe_slug(raw_slug: str, category: str = "", fallback_keyword: str = "") -> str:
@@ -303,25 +331,100 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
 
 
 # ─────────────────────────────────────────────────────────────
-# 블로그 글 생성 (기존 app.py generate_post 방식과 동일 구조)
+# 카테고리별 글 구조 정의
+# ─────────────────────────────────────────────────────────────
+CATEGORY_STRUCTURE = {
+    "돈주는 정부 정책": {
+        "default_tags": ["정부지원금", "복지혜택", "신청방법", "2026", "보조금"],
+        "part1_sections": (
+            "1. <p> 도입부 2개 (독자 공감 + 이 글에서 알 수 있는 것)\n"
+            "2. <h2>✅ 지원 대상은 누구?</h2> — 신청 자격 및 대상 설명\n"
+            "3. <h2>💰 지원 금액 & 혜택은?</h2> — 금액 및 혜택 설명 (불확실하면 '공식 사이트 확인' 표기)"
+        ),
+        "part2_sections": (
+            "1. <h2>📋 신청 방법 step by step</h2> — <ol>로 단계별\n"
+            "2. <h2>⚠️ 주의사항 & 꿀팁</h2>\n"
+            "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁"
+        ),
+    },
+    "부업 및 창업": {
+        "default_tags": ["부업추천", "창업지원", "소상공인", "N잡", "2026"],
+        "part1_sections": (
+            "1. <p> 도입부 2개 (독자 공감 — 월급만으론 부족한 현실 + 이 글에서 알 수 있는 것)\n"
+            "2. <h2>💡 이 부업·창업 방법이 주목받는 이유</h2> — 특징과 장점\n"
+            "3. <h2>💰 실제로 얼마나 벌 수 있을까?</h2> — 수익 범위 및 현실적 전망"
+        ),
+        "part2_sections": (
+            "1. <h2>🚀 시작하는 방법 step by step</h2> — <ol>로 단계별\n"
+            "2. <h2>⚠️ 주의사항 & 성공 꿀팁</h2>\n"
+            "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁"
+        ),
+    },
+    "노후 및 연금 전략": {
+        "default_tags": ["국민연금", "퇴직연금", "노후준비", "연금저축", "IRP"],
+        "part1_sections": (
+            "1. <p> 도입부 2개 (노후 불안 공감 + 이 글에서 알 수 있는 것)\n"
+            "2. <h2>📌 핵심 개념 & 왜 지금 준비해야 할까?</h2> — 중요성 설명\n"
+            "3. <h2>💰 실제 수령액 & 혜택은 얼마?</h2> — 금액 예시 및 세제혜택 설명"
+        ),
+        "part2_sections": (
+            "1. <h2>📋 실전 활용 방법 step by step</h2> — <ol>로 단계별\n"
+            "2. <h2>⚠️ 놓치면 손해 보는 꿀팁</h2>\n"
+            "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁"
+        ),
+    },
+    "대출 가이드": {
+        "default_tags": ["대출금리", "주택담보대출", "전세대출", "금리비교", "2026"],
+        "part1_sections": (
+            "1. <p> 도입부 2개 (대출 고민 공감 + 이 글에서 알 수 있는 것)\n"
+            "2. <h2>📌 이 대출 상품의 특징 & 자격 조건</h2> — 신청 자격 및 조건\n"
+            "3. <h2>💰 한도·금리·기간은 어떻게 되나요?</h2> — 핵심 조건 정리"
+        ),
+        "part2_sections": (
+            "1. <h2>📋 신청 방법 step by step</h2> — <ol>로 단계별\n"
+            "2. <h2>⚠️ 대출 전 꼭 확인할 주의사항</h2>\n"
+            "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁"
+        ),
+    },
+    "돈 아끼는 절세 비법": {
+        "default_tags": ["절세방법", "연말정산", "세금환급", "세액공제", "2026"],
+        "part1_sections": (
+            "1. <p> 도입부 2개 (세금 부담 공감 + 이 글에서 알 수 있는 것)\n"
+            "2. <h2>📌 이 절세 방법, 누가 활용할 수 있나요?</h2> — 대상 및 조건\n"
+            "3. <h2>💰 얼마나 절약할 수 있을까?</h2> — 절세 금액 예시"
+        ),
+        "part2_sections": (
+            "1. <h2>📋 절세 실천 방법 step by step</h2> — <ol>로 단계별\n"
+            "2. <h2>⚠️ 실수하면 오히려 손해! 주의사항</h2>\n"
+            "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁"
+        ),
+    },
+}
+
+# ─────────────────────────────────────────────────────────────
+# 블로그 글 생성
 # ─────────────────────────────────────────────────────────────
 def generate_post(item: dict, api_key: str) -> dict:
-    today   = datetime.now().strftime("%Y년 %m월")
-    keyword = item.get("blog_title", item["title"])
+    today    = datetime.now().strftime("%Y년 %m월")
+    keyword  = item.get("blog_title", item["title"])
+    category = item.get("category", "돈주는 정부 정책")
 
-    # ① 메타 정보 — 필드를 분리해서 요청 (JSON 오류 최소화)
+    # 카테고리별 구조 가져오기 (없으면 정부 정책 기본값)
+    struct = CATEGORY_STRUCTURE.get(category, CATEGORY_STRUCTURE["돈주는 정부 정책"])
+
+    # ① 메타 정보
     meta_prompt = f"""다음 블로그 글의 SEO 메타 정보를 JSON으로 출력하세요.
 
 주제: {keyword}
-카테고리: {item['category']}
+카테고리: {category}
 기준: {today}
 
 규칙:
 - JSON만 출력 (백틱, 설명 절대 금지)
 - 모든 값은 쌍따옴표 사용
 - title: 한국어 50자 이내
-- meta_description: 한국어 120자 이내  
-- slug: 영문 소문자와 하이픈만 (예: government-support-2026)
+- meta_description: 한국어 120자 이내
+- slug: 영문 소문자와 하이픈만 (예: pension-irp-guide-2026)
 - tags: 한국어 태그 5개 배열
 - focus_keyword: 한국어 핵심키워드 1개
 
@@ -332,54 +435,50 @@ def generate_post(item: dict, api_key: str) -> dict:
         meta     = extract_json(meta_raw)
         keyword  = meta.get("focus_keyword", keyword)
     except Exception:
-        # 메타 생성 실패 시 기본값으로 진행
         meta = {
             "title":            keyword,
-            "meta_description": f"{keyword} 신청방법과 혜택을 알아보세요.",
+            "meta_description": f"{keyword}에 대해 자세히 알아보세요.",
             "slug":             "",
-            "tags":             [item["category"], "지원금", "신청방법", "2026", "혜택"],
+            "tags":             struct["default_tags"],
             "focus_keyword":    keyword,
         }
 
-    # 슬러그 항상 영문으로 강제 보정
+    # 슬러그 영문으로 강제 보정
     meta["slug"] = make_safe_slug(
         meta.get("slug", ""),
-        category=item.get("category", ""),
+        category=category,
         fallback_keyword=keyword,
     )
 
-    # ② 본문 전반부
+    # ② 본문 전반부 — 카테고리별 섹션 구조 사용
     part1_prompt = (
-        "한국어 블로그 글 전반부를 HTML로 작성하세요.\n"
+        f"한국어 블로그 글 전반부를 HTML로 작성하세요.\n"
         f"주제: {keyword}\n"
-        f"카테고리: {item['category']}\n"
+        f"카테고리: {category}\n"
         f"참고내용: {item['description']}\n"
         f"핵심키워드: {keyword}\n"
         f"기준: {today}\n\n"
-        "순서대로 작성:\n"
-        "1. <p> 도입부 2개 (독자 공감 + 이 글에서 알 수 있는 것)\n"
-        "2. <h2>✅ 지원 대상은 누구?</h2> — 대상 설명\n"
-        "3. <h2>💰 지원 금액은 얼마?</h2> — 금액 설명 (불확실하면 '공식 사이트 확인' 표기)\n\n"
+        f"순서대로 작성:\n"
+        f"{struct['part1_sections']}\n\n"
         "친근한 말투(~해요, ~거든요), 각 섹션을 충분히 상세하게 작성해서 전반부만 400자 이상 되도록 해주세요. HTML만 출력 (설명 없이)"
     )
 
-    # ③ 본문 후반부
+    # ③ 본문 후반부 — 카테고리별 섹션 구조 사용
     part2_prompt = (
-        "한국어 블로그 글 후반부를 HTML로 작성하세요.\n"
+        f"한국어 블로그 글 후반부를 HTML로 작성하세요.\n"
         f"주제: {keyword}\n"
+        f"카테고리: {category}\n"
         f"핵심키워드: {keyword}\n"
         f"참고링크: {item['link']}\n\n"
-        "순서대로 작성:\n"
-        "1. <h2>📋 신청 방법 step by step</h2> — <ol>로 단계별\n"
-        "2. <h2>⚠️ 주의사항 & 꿀팁</h2>\n"
-        "3. <h2>마무리</h2> — 행동 유도 + 공유 부탁\n\n"
+        f"순서대로 작성:\n"
+        f"{struct['part2_sections']}\n\n"
         "친근한 말투(~해요), 각 섹션을 충분히 상세하게 작성해서 후반부만 400자 이상 되도록 해주세요. HTML만 출력 (설명 없이)"
     )
 
     part1 = strip_code_fence(gemini_call(part1_prompt, api_key))
     part2 = strip_code_fence(gemini_call(part2_prompt, api_key))
 
-    # 출처 링크를 본문 맨 아래에 직접 삽입
+    # 출처 링크
     link = item.get("link", "")
     if link:
         source_html = (
@@ -520,7 +619,7 @@ def wp_post(wp_url: str, user: str, pw: str, post_data: dict,
 # ─────────────────────────────────────────────────────────────
 def main():
     st.set_page_config(
-        page_title="정책·부업 블로그 자동화",
+        page_title="생활금융 블로그 자동화",
         page_icon="📋",
         layout="wide",
     )
@@ -528,8 +627,8 @@ def main():
         "<style>.stButton>button{border-radius:10px;font-weight:bold;}</style>",
         unsafe_allow_html=True,
     )
-    st.title("📋 정책·부업 블로그 자동화")
-    st.caption("정부지원금 · 소상공인 · 부업 · 복지혜택 → AI 글 생성 → WordPress 자동 발행")
+    st.title("📋 생활금융 블로그 자동화")
+    st.caption("정부정책 · 부업·창업 · 노후·연금 · 대출 · 절세 → AI 글 생성 → WordPress 자동 발행")
 
     # ── 사이드바 ─────────────────────────────────────────────
     with st.sidebar:
