@@ -261,11 +261,15 @@ def collect_all_news(client_id: str, client_secret: str, categories: list) -> li
 
 
 # ─────────────────────────────────────────────────────────────
-# AI 글감 선별
+# AI 글감 선별 (단일 카테고리용)
 # ─────────────────────────────────────────────────────────────
-def ai_filter(items: list, api_key: str, top_n: int) -> list:
-    # 항목이 top_n보다 적으면 그냥 반환
-    if len(items) <= top_n:
+def ai_filter_single(items: list, api_key: str, pick_n: int) -> list:
+    """items 는 이미 단일 카테고리로 걸러진 리스트. pick_n개 선별 반환."""
+    if not items:
+        return []
+
+    # 항목이 pick_n 이하면 AI 없이 그냥 반환
+    if len(items) <= pick_n:
         for i, item in enumerate(items):
             item.setdefault("blog_title", item["title"])
             item.setdefault("reason", "")
@@ -273,22 +277,21 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
         return items
 
     numbered = "\n".join([
-        f"{i+1}. [{item['category']}] {item['title']}"
+        f"{i+1}. {item['title']}"
         for i, item in enumerate(items)
     ])
 
-    prompt = f"""다음 뉴스 목록에서 블로그 글감으로 좋은 항목 {top_n}개를 골라주세요.
+    prompt = f"""다음 뉴스 목록에서 블로그 글감으로 좋은 항목 {pick_n}개를 골라주세요.
 
 [선별 기준]
 - 일반인이 실제 혜택을 받을 수 있는 정보
 - 검색량이 많을 것 같은 키워드
-- 카테고리가 다양하게 섞이도록
 
 [목록]
 {numbered}
 
 [출력 규칙]
-- 반드시 정확히 {top_n}개 선별
+- 반드시 정확히 {pick_n}개 선별
 - JSON만 출력 (설명, 백틱 절대 금지)
 - blog_title은 반드시 영어 없이 한국어로만 작성
 - reason은 10자 이내 한국어
@@ -297,7 +300,7 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
 {{"selected":[{{"rank":1,"index":1,"blog_title":"제목","reason":"이유"}},{{"rank":2,"index":2,"blog_title":"제목","reason":"이유"}}]}}"""
 
     try:
-        text   = gemini_call(prompt, api_key, max_tokens=3000)
+        text   = gemini_call(prompt, api_key, max_tokens=2000)
         result = extract_json(text)
         selected = []
         for sel in result.get("selected", []):
@@ -309,8 +312,8 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
                 item["rank"]       = sel.get("rank", 99)
                 selected.append(item)
         selected.sort(key=lambda x: x["rank"])
-        # 파싱은 됐지만 항목이 너무 적으면 나머지 보충
-        if len(selected) < min(top_n, len(items)):
+        # 부족하면 나머지로 보충
+        if len(selected) < min(pick_n, len(items)):
             existing_titles = {s["title"] for s in selected}
             for item in items:
                 if item["title"] not in existing_titles:
@@ -318,16 +321,70 @@ def ai_filter(items: list, api_key: str, top_n: int) -> list:
                     item.setdefault("reason", "")
                     item.setdefault("rank", len(selected) + 1)
                     selected.append(item)
-                    if len(selected) >= top_n:
+                    if len(selected) >= pick_n:
                         break
-        return selected[:top_n]
+        return selected[:pick_n]
     except Exception as e:
-        st.error(f"AI 선별 오류 (기본 목록 사용): {e}")
-        for i, item in enumerate(items[:top_n]):
+        st.warning(f"AI 선별 오류 — 기본 순서 사용: {e}")
+        for i, item in enumerate(items[:pick_n]):
             item.setdefault("blog_title", item["title"])
             item.setdefault("reason", "")
             item.setdefault("rank", i + 1)
-        return items[:top_n]
+        return items[:pick_n]
+
+
+def ai_filter_by_category(raw: list, api_key: str, per_cat: int = 5) -> list:
+    """
+    카테고리별로 per_cat개씩 선별.
+    - 수집된 카테고리가 있으면 각 per_cat개 선별
+    - 뉴스가 0개인 카테고리가 있으면 가장 많이 수집된 카테고리에서
+      최대 per_cat*2(=10)개까지 추가 선별해서 보완
+    """
+    # 카테고리별 그룹핑
+    from collections import defaultdict
+    cat_groups: dict = defaultdict(list)
+    for item in raw:
+        cat_groups[item["category"]].append(item)
+
+    result        = []
+    empty_cats    = []   # 뉴스 0개 카테고리
+    global_rank   = 1
+
+    # 1) 각 카테고리 per_cat개씩 선별
+    for cat, items in cat_groups.items():
+        selected = ai_filter_single(items, api_key, per_cat)
+        for item in selected:
+            item["rank"] = global_rank
+            global_rank += 1
+        result.extend(selected)
+
+    # 2) 뉴스가 0개였던 카테고리 수 파악 (선택된 cats 기준은 호출부에서 처리)
+    all_selected_cats = set(item["category"] for item in result)
+    # (빈 카테고리 보완은 호출부에서 전달된 selected_cats와 비교)
+
+    # 3) 결과가 per_cat 미만이면 → 가장 많이 수집된 카테고리에서 추가 선별
+    #    (빈 카테고리 1개당 per_cat개 추가, 최대 per_cat*2까지)
+    total_selected_cats = len(cat_groups)
+    missing_slots       = max(0, per_cat - sum(
+        1 for cat, items in cat_groups.items() if items
+    ))  # 빈 카테고리 수
+
+    if missing_slots > 0 and cat_groups:
+        # 가장 많이 수집된 카테고리 찾기
+        richest_cat  = max(cat_groups, key=lambda c: len(cat_groups[c]))
+        richest_items = cat_groups[richest_cat]
+        already_in   = {item["title"] for item in result}
+        # 이미 선별된 것 제외하고 추가 후보 구성
+        extra_pool   = [it for it in richest_items if it["title"] not in already_in]
+        extra_n      = min(len(extra_pool), missing_slots * per_cat, per_cat)  # 최대 per_cat개 추가
+        if extra_pool and extra_n > 0:
+            extra = ai_filter_single(extra_pool, api_key, extra_n)
+            for item in extra:
+                item["rank"] = global_rank
+                global_rank += 1
+            result.extend(extra)
+
+    return result
 
 
 # ─────────────────────────────────────────────────────────────
@@ -697,7 +754,7 @@ def main():
     with tab_collect:
         st.subheader("① 카테고리 선택 & 뉴스 수집")
 
-        col1, col2, col3 = st.columns([4, 1, 1])
+        col1, col2 = st.columns([5, 1])
         with col1:
             selected_cats = st.multiselect(
                 "수집할 카테고리 (복수 선택 가능)",
@@ -705,11 +762,11 @@ def main():
                 default=list(CATEGORY_QUERIES.keys()),
             )
         with col2:
-            top_n = st.number_input("AI 선별 개수", min_value=3, max_value=20, value=10)
-        with col3:
             st.write("")
             st.write("")
             collect_btn = st.button("🔍 수집 시작", type="primary", use_container_width=True)
+
+        st.caption("📌 카테고리별 최대 5개씩 선별됩니다. 수집 결과가 없는 카테고리는 다른 카테고리로 자동 보완됩니다.")
 
         if collect_btn:
             if not naver_id or not naver_secret:
@@ -723,17 +780,30 @@ def main():
             with st.spinner("📰 네이버 뉴스 수집 중..."):
                 raw = collect_all_news(naver_id, naver_secret, selected_cats)
                 st.session_state["p_raw"] = raw
-            prog.progress(50, "AI 선별 중...")
+            prog.progress(30, "AI 선별 중 (카테고리별 처리)...")
 
-            with st.spinner("✨ Gemini AI 글감 선별 중..."):
-                filtered = ai_filter(raw, gemini_key, top_n)
+            # 카테고리별 수집 현황 표시
+            from collections import Counter
+            cat_counts = Counter(item["category"] for item in raw)
+            info_parts = [f"**{cat}** {cnt}건" for cat, cnt in cat_counts.items()]
+            empty_cats = [cat for cat in selected_cats if cat_counts.get(cat, 0) == 0]
+            st.info("수집 현황: " + " | ".join(info_parts) if info_parts else "수집된 뉴스 없음")
+            if empty_cats:
+                st.warning(f"⚠️ 수집 결과 없음: {', '.join(empty_cats)} — 다른 카테고리로 자동 보완됩니다.")
+
+            with st.spinner("✨ Gemini AI 카테고리별 글감 선별 중... (카테고리 수만큼 시간 소요)"):
+                filtered = ai_filter_by_category(raw, gemini_key, per_cat=5)
                 st.session_state["p_filtered"] = filtered
-                st.session_state["p_posts"]    = {}   # 새 수집 시 초기화
+                st.session_state["p_posts"]    = {}
 
             prog.progress(100, "완료!")
             time.sleep(0.4)
             prog.empty()
-            st.success(f"✅ {len(raw)}개 수집 → AI 선별 {len(filtered)}개")
+
+            # 선별 결과 카테고리별 요약
+            result_counts = Counter(item["category"] for item in filtered)
+            summary = " | ".join([f"**{cat}** {cnt}건" for cat, cnt in result_counts.items()])
+            st.success(f"✅ {len(raw)}개 수집 → AI 선별 {len(filtered)}개  ({summary})")
 
         # 선별 결과 표시
         if st.session_state.get("p_filtered"):
