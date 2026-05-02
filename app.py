@@ -92,11 +92,34 @@ def gemini_call(prompt, api_key):
             continue
     raise RuntimeError(f"모든 모델 실패: {last_err}")
 
+# ── 플랫폼 설정 ──────────────────────────────────────────────
+PLATFORM_CONFIG = {
+    "쿠팡": {
+        "link_text":  "쿠팡에서 최저가 확인하기",
+        "notice":     "<p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>",
+        "url_placeholder": "https://link.coupang.com/a/...",
+        "label":      "🛒 쿠팡 파트너스 링크",
+    },
+    "네이버쇼핑": {
+        "link_text":  "네이버 쇼핑에서 최저가 확인하기",
+        "notice":     "<p><em>이 포스팅은 네이버 쇼핑파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>",
+        "url_placeholder": "https://link.naver.com/...",
+        "label":      "🛍️ 네이버 쇼핑파트너스 링크",
+    },
+}
+
+def strip_fence(text: str) -> str:
+    text = re.sub(r"^```json\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+    text = re.sub(r"^```html\s*|\s*```$", "", text, flags=re.MULTILINE).strip()
+    text = re.sub(r"^```\s*|\s*```$",     "", text, flags=re.MULTILINE).strip()
+    return text
+
 # ── 블로그 글 생성 ────────────────────────────────────────────
-def generate_post(product, partner_url, api_key, category_hint=""):
-    name  = product.get("name", "")
-    price = product.get("price", "") or "미상"
-    cat   = category_hint or ""
+def generate_post(product, partner_url, api_key, category_hint="", platform="쿠팡"):
+    name   = product.get("name", "")
+    price  = product.get("price", "") or "미상"
+    cat    = category_hint or ""
+    cfg    = PLATFORM_CONFIG.get(platform, PLATFORM_CONFIG["쿠팡"])
 
     meta_prompt = (
         "상품명: " + name + "\n"
@@ -109,14 +132,12 @@ def generate_post(product, partner_url, api_key, category_hint=""):
         '"tags":["태그1","태그2","태그3","태그4","태그5"],'
         '"focus_keyword":"핵심키워드"}'
     )
-    meta_raw = gemini_call(meta_prompt, api_key)
-    meta_raw = re.sub(r"^```json\s*|\s*```$", "", meta_raw, flags=re.MULTILINE).strip()
-    meta_raw = re.sub(r"^```\s*|\s*```$",     "", meta_raw, flags=re.MULTILINE).strip()
-    meta = json.loads(meta_raw)
-    keyword = meta.get("focus_keyword", name)
+    meta_raw = strip_fence(gemini_call(meta_prompt, api_key))
+    meta     = json.loads(meta_raw)
+    keyword  = meta.get("focus_keyword", name)
 
-    link_html = '<a href="' + partner_url + '" target="_blank" rel="noopener">쿠팡에서 최저가 확인하기</a>'
-    notice = "<p><em>이 포스팅은 쿠팡 파트너스 활동의 일환으로, 이에 따른 일정액의 수수료를 제공받습니다.</em></p>"
+    link_html = f'<a href="{partner_url}" target="_blank" rel="noopener">{cfg["link_text"]}</a>'
+    notice    = cfg["notice"]
 
     part1_prompt = (
         "한국어 SEO 블로그 리뷰 전반부를 HTML로 작성하세요.\n"
@@ -141,15 +162,10 @@ def generate_post(product, partner_url, api_key, category_hint=""):
         "HTML만 출력 (설명 없이)\n"
     )
 
-    part1 = gemini_call(part1_prompt, api_key)
-    part1 = re.sub(r"^```html\s*|\s*```$", "", part1, flags=re.MULTILINE).strip()
-    part1 = re.sub(r"^```\s*|\s*```$",     "", part1, flags=re.MULTILINE).strip()
+    part1 = strip_fence(gemini_call(part1_prompt, api_key))
+    part2 = strip_fence(gemini_call(part2_prompt, api_key))
 
-    part2 = gemini_call(part2_prompt, api_key)
-    part2 = re.sub(r"^```html\s*|\s*```$", "", part2, flags=re.MULTILINE).strip()
-    part2 = re.sub(r"^```\s*|\s*```$",     "", part2, flags=re.MULTILINE).strip()
-
-    return {**meta, "content": part1 + "\n\n" + part2}
+    return {**meta, "content": part1 + "\n\n" + part2, "platform": platform}
 
 # ── 워드프레스 ────────────────────────────────────────────────
 def wp_get_categories(wp_url, user, pw):
@@ -269,20 +285,32 @@ def main():
 
     # ── 글 작성 탭 ───────────────────────────────────────────
     with tab_write:
-        st.subheader("① 상품 정보 입력")
-        c1, c2 = st.columns(2)
-        with c1:
-            partner_url = st.text_input("🤝 쿠팡 파트너스 링크", placeholder="https://link.coupang.com/a/...")
-        with c2:
-            st.write("")
+        st.subheader("① 플랫폼 & 파트너스 링크")
 
+        platform = st.radio(
+            "판매 플랫폼 선택",
+            list(PLATFORM_CONFIG.keys()),
+            horizontal=True,
+            help="플랫폼을 선택하면 링크 양식과 면책 공고가 자동으로 바뀝니다.",
+        )
+        cfg = PLATFORM_CONFIG[platform]
+
+        if platform == "쿠팡":
+            st.caption("💡 쿠팡 파트너스 센터(https://partners.coupang.com) → 링크 생성 → URL 복사")
+        else:
+            st.caption("💡 네이버 쇼핑파트너스 센터 → 링크 생성 → URL 복사")
+
+        partner_url = st.text_input(cfg["label"], placeholder=cfg["url_placeholder"])
+
+        st.divider()
+        st.subheader("② 상품 정보 입력")
         st.markdown("**상품명과 가격을 입력하세요** (10초면 됩니다)")
         with st.form("product_form"):
             col1, col2 = st.columns(2)
             with col1:
                 mn = st.text_input("상품명 *", placeholder="예: 다우니 실내건조 섬유유연제")
             with col2:
-                mp = st.text_input("가격", placeholder="예: 18,900원  또는  쿠팡 최저가로 만나보세요")
+                mp = st.text_input("가격", placeholder="예: 18,900원  또는  최저가로 만나보세요")
             submitted = st.form_submit_button("✅ 입력 완료", type="primary")
 
         if submitted and mn:
@@ -296,19 +324,20 @@ def main():
         if "product" in st.session_state:
             p = st.session_state["product"]
             with st.container(border=True):
-                st.markdown(f"**📦 {p['name']}**  |  💰 {p.get('price', '')}")
+                plat_badge = "🛒 쿠팡" if platform == "쿠팡" else "🛍️ 네이버쇼핑"
+                st.markdown(f"**📦 {p['name']}**  |  💰 {p.get('price', '')}  |  {plat_badge}")
 
             st.divider()
-            st.subheader("② AI 블로그 글 생성")
+            st.subheader("③ AI 블로그 글 생성")
             category_hint = st.text_input("카테고리 힌트 (선택)", placeholder="예: 바디워시, 주방가전, 다이어트")
 
             if st.button("✍️ SEO 블로그 글 자동 생성", type="primary", use_container_width=True):
                 if not partner_url:
-                    st.warning("⚠️ 파트너스 링크를 먼저 입력해주세요!")
+                    st.warning(f"⚠️ {cfg['label']}를 먼저 입력해주세요!")
                 else:
                     with st.spinner("✨ Gemini가 SEO 최적화 글 작성 중... (30~60초)"):
                         try:
-                            post = generate_post(p, partner_url, gemini_key, category_hint)
+                            post = generate_post(p, partner_url, gemini_key, category_hint, platform)
                             st.session_state["post"] = post
                             st.success("✅ 글 생성 완료!")
                         except Exception as e:
@@ -320,7 +349,11 @@ def main():
             if "post" in st.session_state:
                 post = st.session_state["post"]
                 st.divider()
-                st.subheader("③ 글 확인 & 워드프레스 포스팅")
+                st.subheader("④ 글 확인 & 워드프레스 포스팅")
+
+                # 생성된 플랫폼 표시
+                gen_plat = post.get("platform", "쿠팡")
+                st.caption(f"📌 생성 플랫폼: {'🛒 쿠팡' if gen_plat == '쿠팡' else '🛍️ 네이버쇼핑'}")
 
                 t_col, m_col, s_col = st.columns(3)
                 with t_col:
