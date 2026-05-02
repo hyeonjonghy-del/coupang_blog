@@ -815,7 +815,7 @@ def main():
                 with st.container(border=True):
                     col_chk, col_body, col_dt = st.columns([0.5, 8, 1.5])
                     with col_chk:
-                        st.checkbox("", key=f"p_pick_{i}", value=True)
+                        st.checkbox("", key=f"p_pick_{i}", value=False)
                     with col_body:
                         st.markdown(f"**#{item['rank']} [{item['category']}]** {item['blog_title']}")
                         st.caption(item["description"][:120])
@@ -827,7 +827,7 @@ def main():
             if st.button("✍️ 선택 항목 → 글 생성하기", type="primary", use_container_width=True):
                 chosen = [
                     item for i, item in enumerate(st.session_state["p_filtered"])
-                    if st.session_state.get(f"p_pick_{i}", True)
+                    if st.session_state.get(f"p_pick_{i}", False)
                 ]
                 st.session_state["p_to_write"] = chosen
                 st.session_state["p_posts"]    = {}
